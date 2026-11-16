@@ -166,7 +166,7 @@ let pending=LS.get('pending',[]);
 let config=Object.assign({},DEFAULT_CONFIG,LS.get('config',{}));
 let configDirty=LS.get('configDirty',false);
 let local=Object.assign({url:'',token:'',yo:'William',lastSync:0},LS.get('local',{}));
-let nemSec='recibos',tab='inicio',cycleOff=0,filt={persona:'',tipo:'',q:''};
+let nemSec='general',tab='inicio',cycleOff=0,filt={persona:'',tipo:'',q:''};
 
 function migrar(){let ch=false;const N=config.nemesis;
   if(!N||N.activo===undefined){config.nemesis={...DEFAULT_CONFIG.nemesis,...(N||{})};
@@ -206,7 +206,7 @@ const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 const active=()=>movs.filter(m=>!m.borrado);
 const TIPOS={gasto:{n:'Gasto',i:'🧾',c:'gas',s:-1},ingreso:{n:'Ingreso',i:'💰',c:'ing',s:1},
   ahorro:{n:'Ahorro',i:'🐷',c:'aho',s:-1},retiro:{n:'Retiro ahorro',i:'↩️',c:'aho',s:1},pago_tc:{n:'Pago tarjeta',i:'💳',c:'muted',s:-1},
-  prestamo:{n:'Préstamo',i:'🤝',c:'warn',s:-1},abono:{n:'Abono préstamo',i:'🔙',c:'ing',s:1}};
+  prestamo:{n:'Préstamo',i:'🤝',c:'warn',s:-1},abono:{n:'Abono préstamo',i:'🔙',c:'ing',s:1},traslado:{n:'Traslado',i:'🔄',c:'muted',s:0}};
 const isN=m=>m.caja==='nemesis';
 const INQ='Inquilino (servicios)',REEMB='Reembolso de servicios';
 const RECS=()=>((config.nemesis&&config.nemesis.recibos)||[]);
@@ -354,6 +354,7 @@ function parseSeg(seg){
   if(it.tipo==='gasto'||it.tipo==='ingreso')it.categoria=guessCat(words,it.tipo,it.caja);
   if(it._reemb){it.categoria=REEMB;delete it._reemb}
   if(hogHit&&it.tipo==='ingreso'&&it.caja==='')it.categoria=hogHit;
+  if(it.caja==='nemesis')it.medio=/\b(transferencia|transfirio|transferi|pse|nequi|daviplata|consigno|consignacion|cuenta|bancolombia)\b/.test(n)?CTA():'Efectivo';
   let recHit=null;
   if(it.caja==='nemesis'&&it.tipo==='gasto'){const W=words.map(w=>({luz:'energia',predial:'impuesto',uno:'1',dos:'2',primer:'1',segundo:'2'}[w]||w));
     let best=0;for(const r of RECS()){const tk=nz(r.nombre).split(/[^a-z0-9]+/).filter(Boolean);if(!W.includes(tk[0]))continue;const sc=tk.filter(x=>W.includes(x)).length;if(sc>best){best=sc;recHit=r}}
@@ -587,7 +588,26 @@ function fondoSaldo(n){return active().filter(m=>m.fondo===n).reduce((a,m)=>a+(m
 function promGastos(){const v=[];for(let i=1;i<=3;i++){const t=totals(inCycle(cycleAt(-i)));if(t.gas)v.push(t.gas)}
   if(!v.length){const t=totals(inCycle(cycleAt(0)));if(t.gas)v.push(t.gas)}return v.length?v.reduce((a,b)=>a+b,0)/v.length:0}
 /* ================== Casa en arriendo (Némesis) ================== */
-function nemCaja(){const N=config.nemesis||{};return nemAct().reduce((a,m)=>a+(TIPOS[m.tipo]?.s||0)*(m.tipo==='pago_tc'?0:(+m.monto||0)),+N.saldoInicial||0)}
+const CTA=()=>(config.nemesis&&config.nemesis.cuenta)||'Cuenta';
+const esEf=m=>m.medio==='Efectivo';
+function nemCajas(){const N=config.nemesis||{},B=N.cajaBase||{efectivo:+N.saldoInicial||0,cuenta:0,ts:0},r={efectivo:+B.efectivo||0,cuenta:+B.cuenta||0};
+  for(const m of nemAct()){if(m.tipo==='pago_tc'||(+m.creado||0)<=(+B.ts||0))continue;const v=+m.monto||0;
+    if(m.tipo==='traslado'){if(esEf(m)){r.efectivo+=v;r.cuenta-=v}else{r.cuenta+=v;r.efectivo-=v}continue}
+    const sg=TIPOS[m.tipo]?.s||0;if(esEf(m))r.efectivo+=sg*v;else r.cuenta+=sg*v}
+  r.total=r.efectivo+r.cuenta;return r}
+function nemCaja(){return nemCajas().total}
+function ajustarCaja(){const C=nemCajas();
+  $('#sheetBody').innerHTML=`<div class="row sp"><h2 style="margin:0;font-size:18px">💰 Plata de la casa hoy</h2><button class="btn sm" onclick="closeForm()">✕</button></div>
+  <div class="small muted" style="margin-top:6px">Cuenta la plata que hay hoy y escríbela. Desde aquí la app suma y resta sola cada movimiento de la casa.</div>
+  <label>💵 Efectivo</label><input id="cjE" class="money" inputmode="numeric" value="${fmtN.format(Math.max(0,Math.round(C.efectivo)))}" oninput="fmtInput(this)">
+  <label>🏦 Nombre de la cuenta</label><input id="cjN" value="${esc(CTA())}" placeholder="Ej: Nequi, Bancolombia">
+  <label>🏦 Saldo en la cuenta</label><input id="cjC" class="money" inputmode="numeric" value="${fmtN.format(Math.max(0,Math.round(C.cuenta)))}" oninput="fmtInput(this)">
+  <div class="btns"><button class="btn pri" onclick="saveCaja()">Guardar</button></div>`;$('#sheet').classList.remove('hidden')}
+function saveCaja(){const nn=$('#cjN').value.trim()||'Cuenta',old=CTA();
+  config.nemesis.cajaBase={efectivo:num($('#cjE').value),cuenta:num($('#cjC').value),ts:Date.now()};
+  if(nn!==old){config.nemesis.cuenta=nn;for(const m of nemAct())if(m.medio===old){m.medio=nn;m.actualizado=Date.now();if(!pending.includes(m.id))pending.push(m.id)}}
+  touchConfig();closeForm();toast('Saldos actualizados ✓');render()}
+function trasladoCaja(dir){openForm(null,{caja:'nemesis',tipo:'traslado',medio:dir==='aEf'?'Efectivo':CTA(),persona:'Compartido',descripcion:dir==='aEf'?'Retiro de '+CTA()+' a efectivo':'Consignación de efectivo a '+CTA()})}
 /* ---- Inquilinos ---- */
 const ymOf=d=>iso(d).slice(0,7);
 function valorEn(q,ym){const C=(q.cambios||[]).slice().sort((a,b)=>a.desde.localeCompare(b.desde));if(!C.length)return+q.arriendo||0;
@@ -615,8 +635,6 @@ function inqCard(q,i){const S=inqStatus(q),A=S.aniv,dn=days(today(),S.next);
     :S.adelanto>0?`<div class="alert good" style="margin-top:8px">Adelantado ${money(S.adelanto)} ✓</div>`:`<div class="alert good" style="margin-top:8px">Arriendo al día ✓</div>`;
   if(S.last)h+=barRow('Pagado del mes ('+fmtD(S.last)+')',S.mesAct,S.canonMes,S.mesAct>=S.canonMes?'var(--ing)':'var(--warn)',money(S.mesAct)+' / '+money(S.canonMes));
   h+=`<div class="small muted">Próximo cobro: ${fmtD(S.next)} (${dn===0?'hoy':dn===1?'mañana':'en '+dn+' días'})</div>`;
-  const ue=nemAct().filter(m=>m.tercero===q.nombre&&/^energ/i.test(m.descripcion||'')).sort((a,b)=>b.fecha.localeCompare(a.fecha))[0];
-  if(ue)h+=`<div class="small muted" style="margin-top:4px">⚡ Última energía (${fmtD(parse(ue.fecha))}): ${money(ue.monto)}${(ue.descripcion.match(/(\d+)\s*kWh/)||[])[1]?' · '+ue.descripcion.match(/(\d+)\s*kWh/)[1]+' kWh':''}</div>`;
   if((q.servicios||'reembolsa')==='reembolsa'&&S.serv)h+=`<div class="small ${S.serv>0?'warn':'ing'}" style="margin-top:4px">${S.serv>0?'Servicios por devolver: <b>'+money(S.serv)+'</b>':'Servicios: saldo a su favor '+money(-S.serv)}</div>`;
   if(A){if(A.hecho)h+=`<div class="small ing" style="margin-top:4px">📈 Aumento del ${fmtD(A.fecha)} ${A.fecha.getFullYear()} ya aplicado ✓</div>`;
     else if(A.dias<=60)h+=`<div class="alert" style="margin-top:8px">📈 <b>Cumple ${A.anios>0?A.anios+(A.anios>1?' años':' año'):'año'} el ${fmtD(A.fecha)}</b> (${A.dias===0?'hoy':'en '+A.dias+' días'}).
@@ -624,6 +642,11 @@ function inqCard(q,i){const S=inqStatus(q),A=S.aniv,dn=days(today(),S.next);
       Avísenle por escrito antes de aplicarlo.<div class="btns"><button class="btn sm" onclick="aumentoInq(${i})">Aplicar aumento</button></div></div>`;
     else h+=`<div class="small muted" style="margin-top:4px">📅 Aniversario del contrato: ${fmtD(A.fecha)} ${A.fecha.getFullYear()}</div>`}
   else h+=`<div class="small muted" style="margin-top:4px">📅 Agrega la fecha del contrato (✏️) para avisarte del aumento anual.</div>`;
+  const MR=RECS().map((r,k)=>[r,k]).filter(([r])=>r.resp===q.nombre);
+  if(MR.length)h+=`<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--ln)"><div class="small"><b>Sus recibos</b></div>${MR.map(([r,k])=>{const H=recHist(r),l=H[H.length-1];
+    const val=l?(r.calc==='energia'?l.inq:l.total):0;
+    return`<div class="fx"><div class="ico">${r.icono||'🧾'}</div><div class="mid" style="flex:1;min-width:0"><div>${esc(r.nombre)}${r.calc==='energia'?' <span class="small muted">(su parte)</span>':''}</div>
+      <div class="small muted">${l?money(val)+' · '+fmtD(parse(l.fecha))+(l.cons?' · '+esc(l.cons):''):'Sin registros'}</div></div><button class="btn sm" onclick="regRecibo(${k})">+ Registrar</button></div>`}).join('')}</div>`;
   const P={caja:'nemesis',tercero:q.nombre,persona:'Compartido'};
   h+=`<div class="btns" style="flex-wrap:wrap"><button class="btn sm pri" onclick="openForm(null,${js({...P,tipo:'ingreso',categoria:catsFor('ingreso','nemesis').find(esArr)||'Arriendo',descripcion:'Arriendo '+q.nombre,monto:Math.min(S.porCobrar||S.canon,S.canon)})})">💰 Pagó arriendo</button>
     ${(q.servicios||'reembolsa')==='reembolsa'?`${S.serv>0?`<button class="btn sm" onclick="openForm(null,${js({...P,tipo:'ingreso',categoria:REEMB,descripcion:'Reembolso servicios '+q.nombre,monto:S.serv})})">💵 Devolvió servicios</button>`:''}`:''}</div></div>`;
@@ -639,7 +662,7 @@ function energia(i,cat){const q=INQS()[i];if(!q)return;eCat=cat||'';const U=LS.g
   ${f('eKwh','Consumo del medidor (kWh)','','kWh',1)}${f('eRep','% de aseo y subsidio',String(U.rep??50),'50',1)}
   ${f('eSub','Subsidio',U.sub?fmtN.format(U.sub):'','$0')}${f('eAse','Aseo',U.ase?fmtN.format(U.ase):'','$0')}</div>
   <div class="grid2"><div><label>Fecha de pago del recibo</label><input id="eFec" type="date" value="${iso(today())}"></div>
-  <div><label>Medio de pago</label><select id="eMed">${medios().map(m=>`<option ${m===(U.med||'Transferencia / PSE')?'selected':''}>${esc(m)}</option>`).join('')}</select></div></div>
+  <div><label>¿De dónde salió?</label><select id="eMed">${['Efectivo',CTA()].map(m=>`<option ${m===(U.med===CTA()||U.med==='Efectivo'?U.med:'Efectivo')?'selected':''} value="${esc(m)}">${m==='Efectivo'?'💵 Efectivo':'🏦 '+esc(m)}</option>`).join('')}</select></div></div>
   <div id="eRes" class="card" style="margin:12px 0 0;background:var(--bg)"></div>
   <div class="btns"><button class="btn pri" onclick="saveE(${i})">Registrar recibo</button></div>`;
   $('#sheet').classList.remove('hidden');calcE()}
@@ -690,7 +713,7 @@ function regRecibo(i){const r=RECS()[i];if(!r)return;const qi=INQS().findIndex(q
   <label>Valor del recibo</label><input id="rVal" class="money" inputmode="numeric" placeholder="$0" oninput="fmtInput(this)">
   <div class="grid2">${r.unidad?`<div><label>Consumo (${esc(r.unidad)}) opcional</label><input id="rCon" inputmode="decimal"></div>`:''}
   <div><label>Fecha de pago</label><input id="rFec" type="date" value="${iso(today())}"></div>
-  <div><label>Medio de pago</label><select id="rMed">${medios().map(m=>`<option ${m==='Transferencia / PSE'?'selected':''}>${esc(m)}</option>`).join('')}</select></div></div>
+  <div><label>¿De dónde salió?</label><select id="rMed">${['Efectivo',CTA()].map(m=>`<option value="${esc(m)}">${m==='Efectivo'?'💵 Efectivo':'🏦 '+esc(m)}</option>`).join('')}</select></div></div>
   <label>Nota (opcional)</label><input id="rNot" placeholder="Ej: periodo oct–nov">
   <div class="btns"><button class="btn pri" onclick="saveRecibo(${i})">Guardar</button></div>`;
   $('#sheet').classList.remove('hidden');setTimeout(()=>{const x=$('#rVal');x&&x.focus()},150)}
@@ -752,50 +775,67 @@ function utilidad(list){let ing=0,gas=0;for(const m of list){if(esReemb(m))conti
 function prestSaldos(caja){const o={};for(const m of active()){if(m.tipo!=='prestamo'&&m.tipo!=='abono')continue;if((isN(m)?'nemesis':'hogar')!==caja)continue;
   const k=m.tercero||'(sin nombre)';o[k]=(o[k]||0)+(m.tipo==='prestamo'?1:-1)*(+m.monto||0)}
   const list=Object.entries(o).filter(([,v])=>Math.abs(v)>0).sort((a,b)=>b[1]-a[1]);return{list,total:list.reduce((a,[,v])=>a+Math.max(0,v),0)}}
+function ymBack(n){const t=today(),o=[];for(let k=n-1;k>=0;k--){const d=new Date(t.getFullYear(),t.getMonth()-k,1);o.push(iso(d).slice(0,7))}return o}
+const ymLbl=ym=>MES[+ym.slice(5)-1]+(ym.slice(5)==='01'?' '+ym.slice(2,4):'');
+function nemResumen(){const N=config.nemesis||{},yy=new Date().getFullYear();
+  const first=nemAct().reduce((a,m)=>m.fecha<a?m.fecha:a,iso(today())).slice(0,7),ini=[first,N.inicio||first].sort()[0];
+  let M=ymBack(12).filter(ym=>ym>=ini);if(!M.length)M=[iso(today()).slice(0,7)];
+  const R=M.map(ym=>{const U=utilidad(nemAct().filter(m=>m.fecha.slice(0,7)===ym));return{ym,...U}});
+  const mx=Math.max(1,...R.map(r=>Math.max(r.ing,r.gas)));
+  const UY=utilidad(nemAct().filter(m=>m.fecha>=yy+'-01-01')),mY=R.filter(r=>r.ym.startsWith(String(yy))).length||1;
+  let h=`<div class="card"><h2>📊 Resumen de la casa</h2><div class="grid2"><div class="stat"><span class="small muted">Utilidad ${yy}</span><b class="${UY.neta<0?'gas':'ing'}">${money(UY.neta)}</b></div>
+    <div class="stat"><span class="small muted">Promedio por mes</span><b class="${UY.neta<0?'gas':'ing'}">${money(UY.neta/mY)}</b></div>
+    <div class="stat"><span class="small muted">Ingresos ${yy}</span><b class="ing">${money(UY.ing)}</b></div><div class="stat"><span class="small muted">Gastos ${yy}</span><b class="gas">${money(UY.gas)}</b></div></div>
+  <div class="small muted" style="margin:12px 0 2px">Ingresos vs gastos por mes</div>
+  <div class="vbars">${R.map(r=>`<div class="g"><div class="pair"><i style="height:${r.ing/mx*100}%;background:var(--ing)"></i><i style="height:${r.gas/mx*100}%;background:var(--gas)"></i></div><small>${ymLbl(r.ym)}</small></div>`).join('')}</div>
+  <div class="legend row" style="gap:14px;margin-top:6px"><div><i style="background:var(--ing)"></i>Ingresos</div><div><i style="background:var(--gas)"></i>Gastos</div></div>
+  <div style="margin-top:10px">${R.slice(-6).reverse().map(r=>`<div class="row sp small" style="padding:5px 0;border-bottom:1px solid var(--ln)"><span style="width:52px">${ymLbl(r.ym)}</span><span class="ing">${money(r.ing)}</span><span class="gas">−${money(r.gas)}</span><b class="${r.neta<0?'gas':'ing'}" style="min-width:90px;text-align:right">${money(r.neta)}</b></div>`).join('')}</div>
+  <div class="small muted" style="margin-top:6px">Utilidad = arriendos y otros ingresos − gastos de la casa. No incluye préstamos, ahorros, traslados ni los servicios que devuelven los inquilinos.</div></div>`;
+  // recibos por mes (apilado)
+  const RC=RECS(),M6=ymBack(6),cols=['#f59e0b','#0ea5e9','#38bdf8','#ef4444','#8b5cf6','#10b981','#64748b','#db2777'];
+  const tot=M6.map(ym=>RC.map(r=>nemAct().filter(m=>m.tipo==='gasto'&&m.categoria===r.nombre&&m.fecha.slice(0,7)===ym).reduce((a,m)=>a+(+m.monto||0),0)));
+  const mx2=Math.max(1,...tot.map(a=>a.reduce((x,y)=>x+y,0)));
+  if(tot.some(a=>a.some(Boolean)))h+=`<div class="card"><h2>🧾 Recibos por mes</h2><div class="vbars" style="height:130px">${M6.map((ym,k)=>{const sum=tot[k].reduce((x,y)=>x+y,0);
+      return`<div class="g"><div style="font-size:9.5px;color:var(--mu)">${sum?Math.round(sum/1000)+'k':''}</div><div style="display:flex;flex-direction:column-reverse;width:60%;height:${sum/mx2*100}%;border-radius:4px 4px 0 0;overflow:hidden">${tot[k].map((v,ri)=>v?`<i style="display:block;height:${v/sum*100}%;background:${cols[ri%cols.length]}"></i>`:'').join('')}</div><small>${ymLbl(ym)}</small></div>`}).join('')}</div>
+    <div class="legend row" style="gap:10px;flex-wrap:wrap;margin-top:6px">${RC.map((r,ri)=>`<div><i style="background:${cols[ri%cols.length]}"></i>${esc(r.nombre)}</div>`).join('')}</div></div>`;
+  return h}
 function vNemesis(){
   if(!NEM())return`<div class="card empty">🏘️ Activa el manejo de la casa en arriendo en <b>Ajustes → Casa en arriendo</b>.<br><br><button class="btn pri" onclick="go('ajustes')">Ir a Ajustes</button></div>`;
-  const N=config.nemesis,A=arrStatus(),cj=nemCaja(),P=prestSaldos('nemesis'),F=fondosFor('nemesis'),ahorrado=F.reduce((a,f)=>a+fondoSaldo(f.nombre),0);
-  const SV=servPorCobrar(),yy=new Date().getFullYear(),ini=(N.inicio&&N.inicio.slice(0,4)==String(yy))?N.inicio.slice(0,7):yy+'-01',y0=ini+'-01',UA=utilidad(nemAct().filter(m=>m.fecha>=y0)),mesesAno=Math.max(1,new Date().getMonth()+2-(+ini.slice(5,7)));
-  let h=`<div class="card"><div class="muted small">Caja disponible de ${esc(NN())}</div><div class="big ${cj<0?'gas':''}">${money(cj)}</div>
-  <div class="grid2" style="margin-top:10px"><div class="stat"><span class="small muted">Arriendo por cobrar</span><b class="${A.porCobrar>0?'warn':'ing'}">${money(A.porCobrar)}</b></div>
-  <div class="stat"><span class="small muted">Servicios por cobrar</span><b class="${SV>0?'warn':'ing'}">${money(Math.max(0,SV))}</b></div>
-  <div class="stat"><span class="small muted">Préstamos por cobrar</span><b class="warn">${money(P.total)}</b></div>
-  <div class="stat"><span class="small muted">Ahorrado (impuestos)</span><b class="aho">${money(ahorrado)}</b></div></div>
-  <hr><div class="row sp"><span class="small muted">Utilidad neta desde ${MES[+ini.slice(5,7)-1]} ${yy}</span><b class="${UA.neta<0?'gas':'ing'}">${money(UA.neta)}</b></div>
-  <div class="small muted">≈ ${money(UA.neta/mesesAno)} al mes · no cuenta préstamos, ahorros ni servicios que devuelve el inquilino.</div>
-  <div class="small muted" style="margin-top:8px">Caja = saldo inicial + arriendos y abonos − gastos, préstamos y ahorros de la casa.</div></div>`;
-  const SECS=[['recibos','🧾 Recibos'],['arriendos','👥 Arriendos'],['mas','🤝 Préstamos y fondos'],['movs','📋 Movimientos']];
-  h+=`<div class="chips" style="margin-bottom:12px">${SECS.map(([k,l])=>`<button class="${nemSec===k?'on':''}" onclick="nemSec='${k}';render()">${l}</button>`).join('')}</div>`;
-  if(nemSec==='recibos'){
-    const yS=yy+'-01-01',GR=nemAct().filter(m=>m.tipo==='gasto'&&m.fecha>=yS&&RECS().some(r=>r.nombre===m.categoria));
-    const casa=GR.filter(m=>!m.tercero).reduce((a,m)=>a+(+m.monto||0),0),inq=GR.filter(m=>m.tercero).reduce((a,m)=>a+(+m.monto||0),0);
-    h+=`<div class="card"><h2>🧾 Recibos ${yy}</h2><div class="grid2"><div class="stat"><span class="small muted">Asumidos por la casa</span><b class="gas">${money(casa)}</b></div>
-      <div class="stat"><span class="small muted">A cargo de inquilinos</span><b class="warn">${money(inq)}</b></div></div></div>`;
-    h+=RECS().map(reciboCard).join('')+`<button class="btn" style="width:100%;margin-bottom:12px" onclick="editRec(null)">+ Agregar otro recibo</button>`;
+  const N=config.nemesis,A=arrStatus(),C=nemCajas(),P=prestSaldos('nemesis'),F=fondosFor('nemesis'),ahorrado=F.reduce((a,f)=>a+fondoSaldo(f.nombre),0),SV=servPorCobrar();
+  if(!['general','inquilinos','movs'].includes(nemSec))nemSec='general';
+  let h=`<div class="chips" style="margin-bottom:12px">${[['general','🏠 Casa general'],['inquilinos','👥 Inquilinos'],['movs','📋 Movimientos']].map(([k,l])=>`<button class="${nemSec===k?'on':''}" onclick="nemSec='${k}';render()">${l}</button>`).join('')}</div>`;
+  if(nemSec==='general'){
+    h+=`<div class="card"><div class="muted small">Plata de ${esc(NN())}</div><div class="big ${C.total<0?'gas':''}">${money(C.total)}</div>
+    <div class="grid2" style="margin-top:10px"><div class="stat"><span class="small muted">💵 Efectivo</span><b class="${C.efectivo<0?'gas':''}">${money(C.efectivo)}</b></div>
+    <div class="stat"><span class="small muted">🏦 ${esc(CTA())}</span><b class="${C.cuenta<0?'gas':''}">${money(C.cuenta)}</b></div></div>
+    <div class="btns" style="flex-wrap:wrap"><button class="btn sm" onclick="ajustarCaja()">✏️ Ajustar saldos</button><button class="btn sm" onclick="trasladoCaja('aCta')">🔄 Consignar</button><button class="btn sm" onclick="trasladoCaja('aEf')">🔄 Retirar a efectivo</button></div>
+    ${C.efectivo<0||C.cuenta<0?'<div class="small gas" style="margin-top:6px">⚠️ Un saldo quedó negativo: revisa si algún movimiento tiene el medio equivocado o ajusta los saldos.</div>':''}
+    <hr><div class="grid2"><div class="stat"><span class="small muted">Arriendo por cobrar</span><b class="${A.porCobrar>0?'warn':'ing'}">${money(A.porCobrar)}</b></div>
+    <div class="stat"><span class="small muted">Servicios por cobrar</span><b class="${SV>0?'warn':'ing'}">${money(Math.max(0,SV))}</b></div>
+    <div class="stat"><span class="small muted">Préstamos por cobrar</span><b class="${P.total>0?'warn':''}">${money(P.total)}</b></div>
+    <div class="stat"><span class="small muted">Ahorrado (impuestos)</span><b class="aho">${money(ahorrado)}</b></div></div></div>`;
+    h+=nemResumen();
+    const RG=RECS().map((r,i)=>[r,i]).filter(([r])=>!r.resp||r.calc==='energia'||!INQS().some(q=>q.nombre===r.resp));
+    h+=`<div class="day" style="margin-top:4px;text-transform:none">Recibos y gastos de la casa</div>`+RG.map(([r,i])=>reciboCard(r,i)).join('')
+      +`<div class="btns" style="margin:0 0 12px"><button class="btn" onclick="editRec(null)">+ Agregar recibo</button><button class="btn" onclick="openForm(null,${js({caja:'nemesis',tipo:'gasto',persona:'Compartido',categoria:catsFor('gasto','nemesis').find(c=>/repara|manten/i.test(c))||''})})">🔧 Reparación u otro gasto</button></div>`;
+    h+=fijosCard('nemesis');
+    h+=`<div class="card"><h2>🤝 Préstamos con plata de la casa</h2>${P.list.length?P.list.map(([p,v])=>`<div class="fx"><div class="mid" style="flex:1"><div><b>${esc(p)}</b></div>
+      <div class="small ${v>0?'warn':'ing'}">${v>0?'Debe '+money(v):'A favor '+money(-v)}</div></div>
+      <button class="btn sm" onclick="openForm(null,${js({tipo:'abono',caja:'nemesis',tercero:p,persona:'Compartido'})})">🔙 Abono</button>
+      <button class="btn sm" onclick="openForm(null,${js({tipo:'prestamo',caja:'nemesis',tercero:p,persona:'Compartido'})})">+ Prestar</button></div>`).join(''):'<div class="small muted">No hay préstamos pendientes.</div>'}
+      <div class="btns"><button class="btn" onclick="openForm(null,${js({tipo:'prestamo',caja:'nemesis',persona:'Compartido'})})">🤝 Nuevo préstamo</button></div></div>`;
+    h+=F.map(f=>fondoCard(f,'nemesis')).join('')||`<div class="card small muted">Creen fondos para el predial y otros impuestos en <b>Ajustes → Fondos</b>, eligiendo "${esc(NN())}".</div>`;
     return h}
-  if(nemSec==='arriendos'){
-  // inquilinos
-  const QA=INQS();
-  h+=`<div class="card"><h2>👥 Inquilinos <span class="small muted">${money(A.mto)}/mes</span></h2>${QA.map((q,i)=>q.activo===false?'':inqCard(q,i)).join('')||'<div class="small muted">Agrega a cada inquilino con su arriendo, día de pago, fecha del contrato y cómo maneja los servicios.</div>'}
-    <div class="btns"><button class="btn" onclick="editInq(null)">+ Agregar inquilino</button></div>
-    ${QA.some(q=>q.activo===false)?`<div class="small muted" style="margin-top:8px">Anteriores: ${QA.map((q,i)=>q.activo===false?`<a href="#" onclick="editInq(${i});return false">${esc(q.nombre)}</a>`:'').filter(Boolean).join(' · ')}</div>`:''}</div>`;
-  const huer=nemAct().filter(m=>m.tercero===INQ);
-  if(huer.length)h+=`<div class="alert">Hay ${huer.length} movimientos de servicios sin inquilino asignado. Tócalos en la lista y elige el inquilino.</div>`;
-  h+=fijosCard('nemesis');
-  return h}
-  if(nemSec==='mas'){
-  // préstamos
-  h+=`<div class="card"><h2>🤝 Préstamos con plata de la casa</h2>${P.list.length?P.list.map(([p,v])=>`<div class="fx"><div class="mid" style="flex:1"><div><b>${esc(p)}</b></div>
-    <div class="small ${v>0?'warn':'ing'}">${v>0?'Debe '+money(v):'A favor '+money(-v)}</div></div>
-    <button class="btn sm" onclick="openForm(null,${js({tipo:'abono',caja:'nemesis',tercero:p,persona:'Compartido'})})">🔙 Abono</button>
-    <button class="btn sm" onclick="openForm(null,${js({tipo:'prestamo',caja:'nemesis',tercero:p,persona:'Compartido'})})">+ Prestar</button></div>`).join(''):'<div class="small muted">No hay préstamos pendientes.</div>'}
-    <div class="btns"><button class="btn" onclick="openForm(null,${js({tipo:'prestamo',caja:'nemesis',persona:'Compartido'})})">🤝 Nuevo préstamo</button></div></div>`;
-  // fondos
-  h+=F.map(f=>fondoCard(f,'nemesis')).join('')||`<div class="card small muted">Creen fondos para el predial y otros impuestos en <b>Ajustes → Fondos</b>, eligiendo "${esc(NN())}".</div>`;
-  return h}
-  // ciclo
-  const c=cycleAt(cycleOff),L=inCycle(c,nemAct()),t=totals(L);
-  const UC=utilidad(L);
+  if(nemSec==='inquilinos'){const QA=INQS();
+    h+=`<div class="card"><h2>👥 Inquilinos <span class="small muted">${money(A.mto)}/mes</span></h2><div class="grid2"><div class="stat"><span class="small muted">Arriendo por cobrar</span><b class="${A.porCobrar>0?'warn':'ing'}">${A.porCobrar>0?money(A.porCobrar):'Al día ✓'}</b></div>
+      <div class="stat"><span class="small muted">Servicios por cobrar</span><b class="${SV>0?'warn':'ing'}">${SV>0?money(SV):'Al día ✓'}</b></div></div></div>`;
+    h+=QA.map((q,i)=>q.activo===false?'':`<div class="card" style="padding:4px">${inqCard(q,i)}</div>`).join('')||'<div class="card small muted">Agrega a cada inquilino con su arriendo, día de pago, fecha del contrato y cómo maneja los servicios.</div>';
+    h+=`<button class="btn" style="width:100%;margin-bottom:12px" onclick="editInq(null)">+ Agregar inquilino</button>`;
+    if(QA.some(q=>q.activo===false))h+=`<div class="small muted" style="margin-bottom:12px">Anteriores: ${QA.map((q,i)=>q.activo===false?`<a href="#" onclick="editInq(${i});return false">${esc(q.nombre)}</a>`:'').filter(Boolean).join(' · ')}</div>`;
+    const huer=nemAct().filter(m=>m.tercero===INQ);
+    if(huer.length)h+=`<div class="alert">Hay ${huer.length} movimientos de servicios sin inquilino asignado. Búscalos en 📋 Movimientos y elige el inquilino.</div>`;
+    return h}
+  const c=cycleAt(cycleOff),L=inCycle(c,nemAct()),t=totals(L),UC=utilidad(L);
   h+=cycleBar()+`<div class="card"><h2>Movimientos del ciclo <span class="small ${UC.neta<0?'gas':'ing'}">Utilidad ${money(UC.neta)}</span></h2><div class="grid2"><div class="stat"><span class="small muted">Entró</span><b class="ing">${money(t.ing+t.abo)}</b></div>
   <div class="stat"><span class="small muted">Gastos</span><b class="gas">${money(t.gas)}</b></div></div>
   ${Object.entries(t.cat).sort((a,b)=>b[1]-a[1]).map(([k,v],i)=>barRow(esc(k),v,t.gas,PAL[i%PAL.length])).join('')}</div>`+listByDay(L);
@@ -855,11 +895,11 @@ function vAjustes(){
   <div class="card"><h2>🏘️ Casa en arriendo</h2>
   <label class="chk" style="margin-top:0"><input type="checkbox" id="nAct" ${NEM()?'checked':''}> Llevar la caja de la casa en arriendo</label>
   <div class="grid2"><div><label>Nombre</label><input id="nNom" value="${esc(config.nemesis?.nombre||'')}" placeholder="Casa Némesis"></div>
-  <div><label>Plata en caja hoy</label><input id="nSal" inputmode="numeric" value="${+config.nemesis?.saldoInicial?fmtN.format(config.nemesis.saldoInicial):''}" oninput="fmtInput(this)"></div>
+
   ${[new Date().getFullYear(),new Date().getFullYear()+1].map(y=>`<div><label>IPC ${y-1} (aumentos de ${y}) %</label><input class="nIpc" data-y="${y}" inputmode="decimal" value="${(config.nemesis?.ipc||{})[y]!==undefined?String(config.nemesis.ipc[y]).replace('.',','):''}" placeholder="${y===2026?'5,10':'Lo publica el DANE en enero'}"></div>`).join('')}</div>
   <div class="small muted" style="margin-top:6px">Los inquilinos (arriendo, día de pago, contrato y servicios) se manejan en la pestaña 🏘️.</div>
   <label>Categorías de gastos de la casa (una por línea)</label><textarea id="nCat" rows="5">${esc((config.nemesis?.categoriasGasto||DEFAULT_CONFIG.nemesis.categoriasGasto).join('\n'))}</textarea>
-  <div class="small muted" style="margin-top:6px">"Plata en caja hoy": cuánto dinero de la casa tienen guardado ahora.</div></div>
+  <div class="small muted" style="margin-top:6px">La plata en efectivo y en cuenta se ajusta en 🏘️ → Casa general → Ajustar saldos.</div></div>
 
   <div class="card"><h2>🏷️ Categorías</h2><label>Gastos (una por línea)</label><textarea id="aCatG" rows="8">${esc(config.categoriasGasto.join('\n'))}</textarea>
   <label>Ingresos (una por línea)</label><textarea id="aCatI" rows="3">${esc(config.categoriasIngreso.join('\n'))}</textarea>
@@ -872,7 +912,7 @@ function vAjustes(){
   <div class="btns"><button class="btn" onclick="document.getElementById('imp').click()">Restaurar copia</button></div>
   <div class="btns"><button class="btn del" onclick="borrarTodo()">🗑️ Borrar todos los movimientos</button></div>
   <input type="file" id="imp" accept=".json" style="display:none" onchange="importJSON(this.files[0])">
-  <div class="small muted" style="margin-top:8px">Versión 1.7 · Los datos se guardan en este celular y en su Google Sheet.</div></div>`;
+  <div class="small muted" style="margin-top:8px">Versión 1.8 · Los datos se guardan en este celular y en su Google Sheet.</div></div>`;
 }
 const tcRow=t=>`<div class="erow tc rrow" data-old="${esc(t.nombre||'')}" style="display:block"><div class="g" style="grid-template-columns:1fr 36px"><input placeholder="Nombre de la tarjeta" value="${esc(t.nombre||'')}" data-k="nombre"><button class="x" onclick="this.closest('.erow').remove()" aria-label="Quitar tarjeta">✕</button></div>
   <div class="g" style="grid-template-columns:1.3fr .8fr .8fr 1.3fr;margin-top:6px"><select data-k="titular" aria-label="Titular">${config.personas.map(p=>`<option ${t.titular===p?'selected':''}>${esc(p)}</option>`).join('')}</select>
@@ -900,7 +940,7 @@ function saveCfg(){
     return{...prev,nombre:o.nombre,titular:o.titular,corte:+o.corte||0,pago:+o.pago||0,meta:num(o.meta)}}).filter(t=>t.nombre);
   config.fondos=[...document.querySelectorAll('.erow.f')].map(r=>{const o={};r.querySelectorAll('[data-k]').forEach(i=>o[i.dataset.k]=i.value.trim());
     return{nombre:o.nombre,meta:num(o.meta),fecha:o.fecha||'',caja:o.caja==='nemesis'?'nemesis':'hogar'}}).filter(f=>f.nombre);
-  config.nemesis={...(config.nemesis||DEFAULT_CONFIG.nemesis),activo:$('#nAct').checked,nombre:$('#nNom').value.trim()||'Casa en arriendo',saldoInicial:num($('#nSal').value),
+  config.nemesis={...(config.nemesis||DEFAULT_CONFIG.nemesis),activo:$('#nAct').checked,nombre:$('#nNom').value.trim()||'Casa en arriendo',
     ipc:Object.assign({},config.nemesis?.ipc||{},...[...document.querySelectorAll('.nIpc')].map(x=>{const v=parseFloat(x.value.replace(',','.'));return isNaN(v)?{}:{[x.dataset.y]:v}})),
     categoriasGasto:lines($('#nCat').value)};
   config.recurrentes=[...document.querySelectorAll('.rrow')].map(el=>{const r={...(config.recurrentes||[]).find(x=>x.id===el.dataset.id)};
@@ -919,6 +959,7 @@ function openForm(id,preset){
   fm=ex?{...ex}:Object.assign({id:uid(),fecha:iso(today()),tipo:'gasto',monto:0,persona:local.yo||config.personas[0],categoria:'',medio:'Efectivo',cuotas:1,fondo:'',descripcion:'',rec:''},preset||{});
   if(fmNew&&!preset?.caja&&tab==='nemesis')fm.caja='nemesis';
   fm.caja=fm.caja==='nemesis'?'nemesis':'';fm.tercero=fm.tercero||'';
+  if(fm.caja==='nemesis'&&fm.medio!=='Efectivo'&&fmNew&&!(preset&&preset.medio))fm.medio='Efectivo';
   if(fmNew&&(fm.tipo==='ahorro'||fm.tipo==='retiro')&&!fm.fondo)fm.fondo=fondosFor(fm.caja||'hogar')[0]?.nombre||'';
   drawForm();$('#sheet').classList.remove('hidden');
   if(fmNew)setTimeout(()=>{const i=$('#fMonto');i&&i.focus()},150);
@@ -927,6 +968,8 @@ function collect(){const g=s=>{const e=$(s);return e?e.value:undefined};
   fm.monto=num(g('#fMonto'));fm.fecha=g('#fFecha')||fm.fecha;fm.descripcion=(g('#fDesc')||'').trim();
   if($('#fCat'))fm.categoria=g('#fCat');if($('#fMed'))fm.medio=g('#fMed');if($('#fCuo'))fm.cuotas=Math.max(1,+g('#fCuo')||1);if($('#fFon'))fm.fondo=g('#fFon');if($('#fRep'))fm._rep=$('#fRep').checked;if($('#fTer'))fm.tercero=g('#fTer').trim();if($('#fInqSel'))fm.tercero=g('#fInqSel')}
 function setF(k,v){collect();fm[k]=v;
+  if(k==='caja'&&v==='nemesis'&&fm.medio!=='Efectivo'&&fm.medio!==CTA())fm.medio='Efectivo';
+  if(k==='caja'&&v!=='nemesis'&&(fm.medio===CTA()))fm.medio='Efectivo';
 
   if(k==='tipo'){if(v==='pago_tc'&&!esTarjeta(fm.medio))fm.medio=config.tarjetas[0]?.nombre||'';
     if((v==='ahorro'||v==='retiro')&&!fm.fondo)fm.fondo=fondosFor(fm.caja||'hogar')[0]?.nombre||'';
@@ -947,14 +990,17 @@ function drawForm(){const t=fm.tipo,isA=t==='ahorro'||t==='retiro',isP=t==='pres
   const meds=t==='pago_tc'?config.tarjetas.map(x=>x.nombre):medios();
   $('#sheetBody').innerHTML=`<div class="row sp"><h2 style="margin:0;font-size:18px">${fmNew?'Nuevo movimiento':'Editar movimiento'}</h2><button class="btn sm" onclick="closeForm()">✕</button></div>
   ${NEM()?`<label>¿De qué caja?</label><div class="chips"><button class="${fm.caja?'':'on'}" onclick="setF('caja','')">🏠 Hogar</button><button class="${fm.caja?'on':''}" onclick="setF('caja','nemesis')">🏘️ ${esc(NN())}</button></div>`:''}
-  <label>Tipo</label><div class="chips">${Object.entries(TIPOS).map(([k,v])=>`<button class="${t===k?'on':''}" onclick="setF('tipo','${k}')">${v.i} ${v.n}</button>`).join('')}</div>
+  <label>Tipo</label><div class="chips">${Object.entries(TIPOS).filter(([k])=>fm.caja==='nemesis'?k!=='pago_tc':k!=='traslado').map(([k,v])=>`<button class="${t===k?'on':''}" onclick="setF('tipo','${k}')">${v.i} ${v.n}</button>`).join('')}</div>
   <label>Monto</label><input id="fMonto" class="money" inputmode="numeric" placeholder="$0" value="${fm.monto?fmtN.format(fm.monto):''}" oninput="fmtInput(this)">
   <label>¿Quién?</label><div class="chips">${config.personas.map(p=>`<button class="${fm.persona===p?'on':''}" onclick="setF('persona',${js(p)})">${esc(p)}</button>`).join('')}</div>
   ${isP?`<label>${t==='prestamo'?'¿A quién le prestaron?':'¿Quién está devolviendo?'}</label><input id="fTer" list="terList" value="${esc(fm.tercero)}" placeholder="Nombre"><datalist id="terList">${terceros().map(x=>`<option value="${esc(x)}">`).join('')}</datalist>
     ${fm.tercero?(()=>{const S=prestSaldos(fm.caja||'hogar').list.find(x=>x[0]===fm.tercero);return S?`<div class="small muted" style="margin-top:6px">${esc(fm.tercero)} debe hoy: <b>${money(S[1])}</b></div>`:''})():''}`:''}
   ${isA?`<label>Fondo</label><select id="fFon">${FF.map(f=>`<option ${fm.fondo===f.nombre?'selected':''}>${esc(f.nombre)}</option>`).join('')}</select>`:''}
   ${t==='gasto'||t==='ingreso'?`<label>Categoría</label><select id="fCat" onchange="setF('categoria',this.value)"><option value="">— Elegir —</option>${cats.map(c=>`<option ${fm.categoria===c?'selected':''}>${esc(c)}</option>`).join('')}</select>`:''}
-  ${t==='gasto'||t==='pago_tc'?`<div class="grid2"><div><label>${t==='pago_tc'?'Tarjeta pagada':'Medio de pago'}</label><select id="fMed" onchange="setF('medio',this.value)">${meds.map(c=>`<option ${fm.medio===c?'selected':''}>${esc(c)}</option>`).join('')}</select></div>
+  ${fm.caja==='nemesis'?`<label>${t==='traslado'?'¿Hacia dónde va la plata?':['ingreso','abono','retiro'].includes(t)?'¿Dónde entró la plata?':'¿De dónde salió la plata?'}</label><div class="chips">
+    <button class="${fm.medio==='Efectivo'?'on':''}" onclick="setF('medio','Efectivo')">💵 Efectivo</button><button class="${fm.medio!=='Efectivo'?'on':''}" onclick="setF('medio',${js(CTA())})">🏦 ${esc(CTA())}</button></div>
+    ${t==='traslado'?`<div class="small muted" style="margin-top:6px">${fm.medio==='Efectivo'?'Sacan plata de '+esc(CTA())+' y queda en efectivo.':'Consignan efectivo en '+esc(CTA())+'.'}</div>`:''}`:''}
+  ${(t==='gasto'||t==='pago_tc')&&fm.caja!=='nemesis'?`<div class="grid2"><div><label>${t==='pago_tc'?'Tarjeta pagada':'Medio de pago'}</label><select id="fMed" onchange="setF('medio',this.value)">${meds.map(c=>`<option ${fm.medio===c?'selected':''}>${esc(c)}</option>`).join('')}</select></div>
   ${t==='gasto'&&esTarjeta(fm.medio)?`<div><label>Cuotas</label><input id="fCuo" type="number" min="1" max="48" value="${fm.cuotas||1}"></div>`:'<div></div>'}</div>`:''}
   ${t==='pago_tc'?(()=>{const tc=config.tarjetas.find(x=>x.nombre===fm.medio),d=tc?deuda(tc):null;return d!==null?`<div class="small muted" style="margin-top:6px">Deuda actual de esta tarjeta: <b>${money(d)}</b></div>`:''})():''}
   ${inqSelHTML(t)}
@@ -977,7 +1023,8 @@ function saveMov(){collect();const m=fm;
   if(m.caja==='nemesis'&&INQA().length&&m.tipo==='ingreso'&&(esArr(m.categoria)||m.categoria===REEMB)&&!m.tercero)return toast('Elige el inquilino');
   if(m.tipo==='pago_tc')m.caja='';
   if(m.tipo!=='gasto'||!esTarjeta(m.medio))m.cuotas=1;
-  if(['ingreso','ahorro','retiro','prestamo','abono'].includes(m.tipo))m.medio='';
+  if(m.caja==='nemesis'){if(m.medio!=='Efectivo')m.medio=CTA()}
+  else if(['ingreso','ahorro','retiro','prestamo','abono'].includes(m.tipo))m.medio='';
   if(m.tipo!=='ahorro'&&m.tipo!=='retiro')m.fondo='';
   if(!['gasto','ingreso'].includes(m.tipo))m.categoria='';
   if(fmNew){const dup=active().find(x=>x.tipo===m.tipo&&+x.monto===m.monto&&x.fecha===m.fecha&&x.persona===m.persona);

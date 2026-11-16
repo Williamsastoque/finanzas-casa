@@ -597,6 +597,8 @@ function inqCard(q,i){const S=inqStatus(q),A=S.aniv,dn=days(today(),S.next);
     :S.adelanto>0?`<div class="alert good" style="margin-top:8px">Adelantado ${money(S.adelanto)} ✓</div>`:`<div class="alert good" style="margin-top:8px">Arriendo al día ✓</div>`;
   if(S.last)h+=barRow('Pagado del mes ('+fmtD(S.last)+')',S.mesAct,S.canonMes,S.mesAct>=S.canonMes?'var(--ing)':'var(--warn)',money(S.mesAct)+' / '+money(S.canonMes));
   h+=`<div class="small muted">Próximo cobro: ${fmtD(S.next)} (${dn===0?'hoy':dn===1?'mañana':'en '+dn+' días'})</div>`;
+  const ue=nemAct().filter(m=>m.tercero===q.nombre&&/^energ/i.test(m.descripcion||'')).sort((a,b)=>b.fecha.localeCompare(a.fecha))[0];
+  if(ue)h+=`<div class="small muted" style="margin-top:4px">⚡ Última energía (${fmtD(parse(ue.fecha))}): ${money(ue.monto)}${(ue.descripcion.match(/(\d+)\s*kWh/)||[])[1]?' · '+ue.descripcion.match(/(\d+)\s*kWh/)[1]+' kWh':''}</div>`;
   if((q.servicios||'reembolsa')==='reembolsa'&&S.serv)h+=`<div class="small ${S.serv>0?'warn':'ing'}" style="margin-top:4px">${S.serv>0?'Servicios por devolver: <b>'+money(S.serv)+'</b>':'Servicios: saldo a su favor '+money(-S.serv)}</div>`;
   if(A){if(A.hecho)h+=`<div class="small ing" style="margin-top:4px">📈 Aumento del ${fmtD(A.fecha)} ${A.fecha.getFullYear()} ya aplicado ✓</div>`;
     else if(A.dias<=60)h+=`<div class="alert" style="margin-top:8px">📈 <b>Cumple ${A.anios>0?A.anios+(A.anios>1?' años':' año'):'año'} el ${fmtD(A.fecha)}</b> (${A.dias===0?'hoy':'en '+A.dias+' días'}).
@@ -606,9 +608,44 @@ function inqCard(q,i){const S=inqStatus(q),A=S.aniv,dn=days(today(),S.next);
   else h+=`<div class="small muted" style="margin-top:4px">📅 Agrega la fecha del contrato (✏️) para avisarte del aumento anual.</div>`;
   const P={caja:'nemesis',tercero:q.nombre,persona:'Compartido'};
   h+=`<div class="btns" style="flex-wrap:wrap"><button class="btn sm pri" onclick="openForm(null,${js({...P,tipo:'ingreso',categoria:catsFor('ingreso','nemesis').find(esArr)||'Arriendo',descripcion:'Arriendo '+q.nombre,monto:Math.min(S.porCobrar||S.canon,S.canon)})})">💰 Pagó arriendo</button>
-    ${(q.servicios||'reembolsa')==='reembolsa'?`<button class="btn sm" onclick="openForm(null,${js({...P,tipo:'gasto',categoria:catsFor('gasto','nemesis').find(esServ)||'',descripcion:'Servicios '+q.nombre})})">🧾 Pagamos servicio</button>
+    ${(q.servicios||'reembolsa')==='reembolsa'?`<button class="btn sm" onclick="energia(${i})">⚡ Recibo de energía</button><button class="btn sm" onclick="openForm(null,${js({...P,tipo:'gasto',categoria:catsFor('gasto','nemesis').find(esServ)||'',descripcion:'Servicios '+q.nombre})})">🧾 Otro servicio</button>
     ${S.serv>0?`<button class="btn sm" onclick="openForm(null,${js({...P,tipo:'ingreso',categoria:REEMB,descripcion:'Reembolso servicios '+q.nombre,monto:S.serv})})">💵 Devolvió servicios</button>`:''}`:''}</div></div>`;
   return h}
+/* ---- Calculadora del recibo de energía (consumo × precio + (aseo − subsidio) × reparto) ---- */
+function energia(i){const q=INQS()[i];if(!q)return;const U=LS.get('ultEnergia',{})[q.id]||{};
+  const f=(id,lbl,v,ph,dec)=>`<div><label>${lbl}</label><input id="${id}" inputmode="${dec?'decimal':'numeric'}" value="${v||''}" placeholder="${ph||''}" ${dec?'':'oninput="fmtInput(this);calcE()"'} ${dec?'oninput="calcE()"':''}></div>`;
+  $('#sheetBody').innerHTML=`<div class="row sp"><h2 style="margin:0;font-size:18px">⚡ Energía de ${esc(q.nombre)}</h2><button class="btn sm" onclick="closeForm()">✕</button></div>
+  <div class="small muted" style="margin-top:6px">${esc(q.nombre)} paga su consumo × el precio del kWh, más su parte del aseo menos su parte del subsidio.</div>
+  <div class="grid2">${f('eRec','Valor total del recibo','','$0')}${f('ePre','Precio kWh (con decimales)',U.pre?String(U.pre).replace('.',','):'','Ej: 740,25',1)}
+  ${f('eAnt','Lectura anterior medidor',U.lect?String(U.lect):'','opcional',1)}${f('eAct','Lectura actual medidor','','opcional',1)}
+  ${f('eKwh','Consumo del medidor (kWh)','','kWh',1)}${f('eRep','% de aseo y subsidio',String(U.rep??50),'50',1)}
+  ${f('eSub','Subsidio',U.sub?fmtN.format(U.sub):'','$0')}${f('eAse','Aseo',U.ase?fmtN.format(U.ase):'','$0')}</div>
+  <div class="grid2"><div><label>Fecha de pago del recibo</label><input id="eFec" type="date" value="${iso(today())}"></div>
+  <div><label>Medio de pago</label><select id="eMed">${medios().map(m=>`<option ${m===(U.med||'Transferencia / PSE')?'selected':''}>${esc(m)}</option>`).join('')}</select></div></div>
+  <div id="eRes" class="card" style="margin:12px 0 0;background:var(--bg)"></div>
+  <div class="btns"><button class="btn pri" onclick="saveE(${i})">Registrar recibo</button></div>`;
+  $('#sheet').classList.remove('hidden');calcE()}
+const dnum=s=>{s=String(s||'').trim();if(!s)return 0;if(/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(s))s=s.replace(/\./g,'');return parseFloat(s.replace(',','.'))||0};
+function calcE(){const g=id=>$('#'+id);if(!g('eRes'))return null;
+  const ant=dnum(g('eAnt').value),act=dnum(g('eAct').value);
+  if(act&&ant&&act>=ant&&document.activeElement!==g('eKwh'))g('eKwh').value=String(Math.round((act-ant)*100)/100).replace('.',',');
+  const v={rec:num(g('eRec').value),pre:dnum(g('ePre').value),kwh:dnum(g('eKwh').value),rep:g('eRep').value===''?50:dnum(g('eRep').value),sub:num(g('eSub').value),ase:num(g('eAse').value),act};
+  v.consumo=v.kwh*v.pre;v.parte=(v.ase-v.sub)*v.rep/100;v.inq=Math.round(v.consumo+v.parte);v.casa=v.rec-v.inq;
+  g('eRes').innerHTML=v.kwh&&v.pre?`<div class="row sp small"><span>Consumo: ${String(v.kwh).replace('.',',')} kWh × ${money(v.pre)}${v.pre%1?','+String(Math.round(v.pre%1*100)).padStart(2,'0'):''}</span><b>${money(v.consumo)}</b></div>
+    <div class="row sp small" style="margin-top:4px"><span>Aseo − subsidio (${String(v.rep).replace('.',',')}%): (${money(v.ase)} − ${money(v.sub)})</span><b>${v.parte<0?'−':''}${money(Math.abs(v.parte))}</b></div><hr style="margin:8px 0">
+    <div class="row sp"><span>Le corresponde a la persona</span><b class="warn" style="font-size:20px">${money(v.inq)}</b></div>
+    ${v.rec?`<div class="row sp small" style="margin-top:4px"><span>Lo asume la casa</span><b class="${v.casa<0?'gas':''}">${money(v.casa)}</b></div>${v.casa<0?'<div class="small gas">⚠️ La parte del inquilino supera el recibo: revisa los datos.</div>':''}`:''}`
+    :'<div class="small muted">Escribe el precio del kWh y el consumo (o las dos lecturas del medidor).</div>';
+  return v}
+function saveE(i){const q=INQS()[i],v=calcE();if(!q||!v)return;if(!v.rec)return toast('Escribe el valor del recibo');if(!v.kwh||!v.pre)return toast('Falta el consumo o el precio del kWh');
+  if(v.casa<0&&!confirm('La parte del inquilino es mayor que el recibo. ¿Registrar igual?'))return;
+  const all=LS.get('ultEnergia',{});all[q.id]={pre:v.pre,sub:v.sub,ase:v.ase,rep:v.rep,lect:v.act||all[q.id]?.lect||'',med:$('#eMed').value};LS.set('ultEnergia',all);
+  const fecha=$('#eFec').value||iso(today()),now=Date.now(),cat=catsFor('gasto','nemesis').find(esServ)||'Servicios públicos';
+  const base={tipo:'gasto',caja:'nemesis',categoria:cat,medio:$('#eMed').value||'Efectivo',persona:'Compartido',cuotas:1,fondo:'',fecha,creado:now,actualizado:now,autor:local.yo,borrado:false,rec:''};
+  const det=`Energía ${String(v.kwh).replace('.',',')} kWh × $${String(v.pre).replace('.',',')} + (aseo ${fmtN.format(v.ase)} − subsidio ${fmtN.format(v.sub)}) × ${String(v.rep).replace('.',',')}%`;
+  upsertLocal({...base,id:uid(),monto:v.inq,tercero:q.nombre,descripcion:det.slice(0,140)});
+  if(v.casa>0)upsertLocal({...base,id:uid(),monto:v.casa,tercero:'',descripcion:'Energía: parte de la casa (recibo '+money(v.rec)+')'});
+  closeForm();toast('Recibo registrado: '+q.nombre+' debe '+money(v.inq));render()}
 function editInq(i){const q=i===null?{id:uid(),nombre:'',unidad:'',arriendo:0,dia:5,contrato:'',servicios:'reembolsa',cobrarDesde:iso(today()).slice(0,7),atrasoInicial:0,activo:true,cambios:[]}:{...INQS()[i]};
   $('#sheetBody').innerHTML=`<div class="row sp"><h2 style="margin:0;font-size:18px">${i===null?'Nuevo inquilino':'Editar inquilino'}</h2><button class="btn sm" onclick="closeForm()">✕</button></div>
   <div class="grid2"><div><label>Nombre</label><input id="qNom" value="${esc(q.nombre)}" placeholder="Ej: Pedro"></div><div><label>Unidad (opcional)</label><input id="qUni" value="${esc(q.unidad||'')}" placeholder="Ej: Apto 201, piso 2"></div>
@@ -751,7 +788,7 @@ function vAjustes(){
   <div class="btns"><button class="btn" onclick="document.getElementById('imp').click()">Restaurar copia</button></div>
   <div class="btns"><button class="btn del" onclick="borrarTodo()">🗑️ Borrar todos los movimientos</button></div>
   <input type="file" id="imp" accept=".json" style="display:none" onchange="importJSON(this.files[0])">
-  <div class="small muted" style="margin-top:8px">Versión 1.5 · Los datos se guardan en este celular y en su Google Sheet.</div></div>`;
+  <div class="small muted" style="margin-top:8px">Versión 1.6 · Los datos se guardan en este celular y en su Google Sheet.</div></div>`;
 }
 const tcRow=t=>`<div class="erow tc rrow" data-old="${esc(t.nombre||'')}" style="display:block"><div class="g" style="grid-template-columns:1fr 36px"><input placeholder="Nombre de la tarjeta" value="${esc(t.nombre||'')}" data-k="nombre"><button class="x" onclick="this.closest('.erow').remove()" aria-label="Quitar tarjeta">✕</button></div>
   <div class="g" style="grid-template-columns:1.3fr .8fr .8fr 1.3fr;margin-top:6px"><select data-k="titular" aria-label="Titular">${config.personas.map(p=>`<option ${t.titular===p?'selected':''}>${esc(p)}</option>`).join('')}</select>

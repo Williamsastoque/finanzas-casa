@@ -137,6 +137,11 @@ const LS={get(k,d){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d}
   set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){setTimeout(()=>toast('⚠️ El almacenamiento del celular está lleno: sincroniza y exporta una copia'),0)}}};
 
 const REEMB_DEF='Reembolso de servicios';
+const DEF_RECIBOS=[{id:'r-ene',nombre:'Energía',icono:'⚡',calc:'energia',resp:'Clímaco',frec:1,unidad:'kWh'},
+ {id:'r-ag1',nombre:'Agua piso 1',icono:'💧',calc:'total',resp:'Clímaco',frec:1,unidad:'m³'},
+ {id:'r-ag2',nombre:'Agua piso 2',icono:'💧',calc:'total',resp:'',frec:1,unidad:'m³'},
+ {id:'r-gas',nombre:'Gas',icono:'🔥',calc:'total',resp:'',frec:1,unidad:'m³'},
+ {id:'r-pre',nombre:'Impuesto predial',icono:'🏛️',calc:'total',resp:'',frec:12,unidad:''}];
 const DEFAULT_CONFIG={
   updatedAt:0,
   corteCiclo:25,
@@ -161,7 +166,7 @@ let pending=LS.get('pending',[]);
 let config=Object.assign({},DEFAULT_CONFIG,LS.get('config',{}));
 let configDirty=LS.get('configDirty',false);
 let local=Object.assign({url:'',token:'',yo:'William',lastSync:0},LS.get('local',{}));
-let tab='inicio',cycleOff=0,filt={persona:'',tipo:'',q:''};
+let nemSec='recibos',tab='inicio',cycleOff=0,filt={persona:'',tipo:'',q:''};
 
 function migrar(){let ch=false;const N=config.nemesis;
   if(!N||N.activo===undefined){config.nemesis={...DEFAULT_CONFIG.nemesis,...(N||{})};
@@ -171,6 +176,10 @@ function migrar(){let ch=false;const N=config.nemesis;
     if(+config.nemesis.arriendo)config.nemesis.inquilinos.push({id:'inq1',nombre:'Inquilino 1',unidad:'',arriendo:+config.nemesis.arriendo,dia:+config.nemesis.dia||5,contrato:'',
       servicios:'reembolsa',cobrarDesde:config.nemesis.inicio||iso(today()).slice(0,7),atrasoInicial:+config.nemesis.porCobrarInicial||0,activo:true,cambios:[]});ch=true}
   if(!config.nemesis.ipc){config.nemesis.ipc={2026:5.1};ch=true}
+  if(!Array.isArray(config.nemesis.recibos)){config.nemesis.recibos=DEF_RECIBOS.map(r=>({...r}));ch=true}
+  const NG=config.nemesis.categoriasGasto||(config.nemesis.categoriasGasto=[]);
+  for(const r of config.nemesis.recibos.slice().reverse())if(!NG.includes(r.nombre)){NG.unshift(r.nombre);ch=true}
+  if(!config.categoriasIngreso.some(c=>/miguel/i.test(c))){config.categoriasIngreso.splice(1,0,'Arriendo Miguel');ch=true}
   const NI=config.nemesis.categoriasIngreso||(config.nemesis.categoriasIngreso=['Arriendo','Otros ingresos']);
   if(!NI.includes(REEMB_DEF)){NI.splice(1,0,REEMB_DEF);ch=true}
   if(config.nemesis.activo&&!config.fondos.some(f=>f.caja==='nemesis')){config.fondos.push({nombre:'Predial '+(config.nemesis.nombre||'casa').replace(/^Casa\s+/i,''),meta:0,caja:'nemesis'});ch=true}
@@ -200,7 +209,8 @@ const TIPOS={gasto:{n:'Gasto',i:'🧾',c:'gas',s:-1},ingreso:{n:'Ingreso',i:'�
   prestamo:{n:'Préstamo',i:'🤝',c:'warn',s:-1},abono:{n:'Abono préstamo',i:'🔙',c:'ing',s:1}};
 const isN=m=>m.caja==='nemesis';
 const INQ='Inquilino (servicios)',REEMB='Reembolso de servicios';
-const esServ=c=>/servicio/i.test(c||'');
+const RECS=()=>((config.nemesis&&config.nemesis.recibos)||[]);
+const esServ=c=>/servicio|energ|agua|gas\b|luz/i.test(nz(c||''))||RECS().some(r=>r.nombre===c&&!/impuesto|predial/i.test(nz(r.nombre)));
 const esArr=c=>/arriendo/i.test(c||'');
 const esReemb=m=>isN(m)&&((m.tipo==='gasto'&&!!m.tercero&&esServ(m.categoria))||(m.tipo==='ingreso'&&m.categoria===REEMB));
 const INQS=()=>((config.nemesis&&config.nemesis.inquilinos)||[]);
@@ -332,8 +342,10 @@ function parseSeg(seg){
   if(it.tipo==='ingreso'||it.tipo==='ahorro'||it.tipo==='retiro')it.medio='';
   if(!esTarjeta(it.medio))it.cuotas=1;
   const words=n.split(/[^a-z0-9ñ]+/).filter(Boolean);
+  const hogHit=config.categoriasIngreso.find(c=>nz(c).split(/[^a-z0-9ñ]+/).filter(w=>w.length>=4&&!['arriendo','otros','ingresos','ingreso'].includes(w)).some(w=>new RegExp('\\b'+w+'\\b').test(n)));
   const qHit=NEM()?INQS().slice().sort((a,b)=>(b.activo!==false)-(a.activo!==false)).find(q=>q.nombre&&new RegExp('\\b'+nz(q.nombre)+'\\b').test(n)):null;
-  if(NEM()&&(qHit||/\b(nemesis|casa del barrio|inquilin[oa]|predial)\b/.test(n)||(it.tipo==='ingreso'&&/\barriendo\b/.test(n))))it.caja='nemesis';else it.caja='';
+  if(hogHit&&it.tipo==='ingreso')it.caja='';else
+  if(NEM()&&(qHit||/\b(nemesis|casa del barrio|inquilin[oa]|predial)\b/.test(n)||/\bpiso\s*(1|2|uno|dos)\b|\b(primer|segundo)\s+piso\b/.test(n)||(it.tipo==='ingreso'&&/\barriendo\b/.test(n))))it.caja='nemesis';else it.caja='';
   if(it.caja==='nemesis'&&/\b(devolvio|reembols\w*|pago los servicios|pago servicios)\b/.test(n)&&/\b(servicio|servicios|luz|agua|gas|reembols\w*)\b/.test(n)){it.tipo='ingreso';it._reemb=true}
   if(it.tipo==='prestamo'||it.tipo==='abono'){it.medio='';const T=terceros();
     it.tercero=T.find(x=>new RegExp('\\b'+nz(x)+'\\b').test(n))||((n.match(/\b(?:preste|presto|prestamo)\s+(?:a\s+)?(?:(?:mi|la|el|don|dona)\s+)?([a-zñ]{3,})/)||[])[1]||(n.match(/\b([a-zñ]{3,})\s+(?:me\s+)?(?:devolvio|abono|pago el prestamo)/)||[])[1]||'');
@@ -341,8 +353,14 @@ function parseSeg(seg){
     if(it.tercero&&!T.includes(it.tercero))it.tercero=it.tercero[0].toUpperCase()+it.tercero.slice(1)}
   if(it.tipo==='gasto'||it.tipo==='ingreso')it.categoria=guessCat(words,it.tipo,it.caja);
   if(it._reemb){it.categoria=REEMB;delete it._reemb}
+  if(hogHit&&it.tipo==='ingreso'&&it.caja==='')it.categoria=hogHit;
+  let recHit=null;
+  if(it.caja==='nemesis'&&it.tipo==='gasto'){const W=words.map(w=>({luz:'energia',predial:'impuesto',uno:'1',dos:'2',primer:'1',segundo:'2'}[w]||w));
+    let best=0;for(const r of RECS()){const tk=nz(r.nombre).split(/[^a-z0-9]+/).filter(Boolean);if(!W.includes(tk[0]))continue;const sc=tk.filter(x=>W.includes(x)).length;if(sc>best){best=sc;recHit=r}}
+    if(recHit)it.categoria=recHit.nombre}
   if(it.caja==='nemesis'){const one=INQA().filter(q=>(q.servicios||'reembolsa')==='reembolsa');
     if(it.tipo==='ingreso'&&(esArr(it.categoria)||it.categoria===REEMB))it.tercero=qHit?qHit.nombre:(INQA().length===1?INQA()[0].nombre:'');
+    else if(it.tipo==='gasto'&&recHit)it.tercero=recHit.calc==='total'&&recHit.resp&&INQA().some(q=>q.nombre===recHit.resp)?recHit.resp:'';
     else if(it.tipo==='gasto'&&esServ(it.categoria))it.tercero=qHit&&(qHit.servicios||'reembolsa')==='reembolsa'?qHit.nombre:(one.length===1&&INQA().length===1?one[0].nombre:'')}
   if(it.tipo==='ahorro'||it.tipo==='retiro'){const f=config.fondos.find(f=>/nemesis|predial/.test(nz(f.nombre))===(it.caja==='nemesis')&&nz(f.nombre).split(/\s+/).some(w=>w.length>=4&&words.includes(w)))||config.fondos.find(f=>nz(f.nombre).split(/\s+/).some(w=>w.length>=4&&words.includes(w)));it.fondo=(f||config.fondos[0]||{}).nombre||''}
   // descripción: texto original sin el monto
@@ -608,11 +626,11 @@ function inqCard(q,i){const S=inqStatus(q),A=S.aniv,dn=days(today(),S.next);
   else h+=`<div class="small muted" style="margin-top:4px">📅 Agrega la fecha del contrato (✏️) para avisarte del aumento anual.</div>`;
   const P={caja:'nemesis',tercero:q.nombre,persona:'Compartido'};
   h+=`<div class="btns" style="flex-wrap:wrap"><button class="btn sm pri" onclick="openForm(null,${js({...P,tipo:'ingreso',categoria:catsFor('ingreso','nemesis').find(esArr)||'Arriendo',descripcion:'Arriendo '+q.nombre,monto:Math.min(S.porCobrar||S.canon,S.canon)})})">💰 Pagó arriendo</button>
-    ${(q.servicios||'reembolsa')==='reembolsa'?`<button class="btn sm" onclick="energia(${i})">⚡ Recibo de energía</button><button class="btn sm" onclick="openForm(null,${js({...P,tipo:'gasto',categoria:catsFor('gasto','nemesis').find(esServ)||'',descripcion:'Servicios '+q.nombre})})">🧾 Otro servicio</button>
-    ${S.serv>0?`<button class="btn sm" onclick="openForm(null,${js({...P,tipo:'ingreso',categoria:REEMB,descripcion:'Reembolso servicios '+q.nombre,monto:S.serv})})">💵 Devolvió servicios</button>`:''}`:''}</div></div>`;
+    ${(q.servicios||'reembolsa')==='reembolsa'?`${S.serv>0?`<button class="btn sm" onclick="openForm(null,${js({...P,tipo:'ingreso',categoria:REEMB,descripcion:'Reembolso servicios '+q.nombre,monto:S.serv})})">💵 Devolvió servicios</button>`:''}`:''}</div></div>`;
   return h}
 /* ---- Calculadora del recibo de energía (consumo × precio + (aseo − subsidio) × reparto) ---- */
-function energia(i){const q=INQS()[i];if(!q)return;const U=LS.get('ultEnergia',{})[q.id]||{};
+let eCat='';
+function energia(i,cat){const q=INQS()[i];if(!q)return;eCat=cat||'';const U=LS.get('ultEnergia',{})[q.id]||{};
   const f=(id,lbl,v,ph,dec)=>`<div><label>${lbl}</label><input id="${id}" inputmode="${dec?'decimal':'numeric'}" value="${v||''}" placeholder="${ph||''}" ${dec?'':'oninput="fmtInput(this);calcE()"'} ${dec?'oninput="calcE()"':''}></div>`;
   $('#sheetBody').innerHTML=`<div class="row sp"><h2 style="margin:0;font-size:18px">⚡ Energía de ${esc(q.nombre)}</h2><button class="btn sm" onclick="closeForm()">✕</button></div>
   <div class="small muted" style="margin-top:6px">${esc(q.nombre)} paga su consumo × el precio del kWh, más su parte del aseo menos su parte del subsidio.</div>
@@ -640,12 +658,65 @@ function calcE(){const g=id=>$('#'+id);if(!g('eRes'))return null;
 function saveE(i){const q=INQS()[i],v=calcE();if(!q||!v)return;if(!v.rec)return toast('Escribe el valor del recibo');if(!v.kwh||!v.pre)return toast('Falta el consumo o el precio del kWh');
   if(v.casa<0&&!confirm('La parte del inquilino es mayor que el recibo. ¿Registrar igual?'))return;
   const all=LS.get('ultEnergia',{});all[q.id]={pre:v.pre,sub:v.sub,ase:v.ase,rep:v.rep,lect:v.act||all[q.id]?.lect||'',med:$('#eMed').value};LS.set('ultEnergia',all);
-  const fecha=$('#eFec').value||iso(today()),now=Date.now(),cat=catsFor('gasto','nemesis').find(esServ)||'Servicios públicos';
+  const fecha=$('#eFec').value||iso(today()),now=Date.now(),cat=eCat||(RECS().find(r=>r.calc==='energia')||{}).nombre||catsFor('gasto','nemesis').find(esServ)||'Servicios públicos';
   const base={tipo:'gasto',caja:'nemesis',categoria:cat,medio:$('#eMed').value||'Efectivo',persona:'Compartido',cuotas:1,fondo:'',fecha,creado:now,actualizado:now,autor:local.yo,borrado:false,rec:''};
   const det=`Energía ${String(v.kwh).replace('.',',')} kWh × $${String(v.pre).replace('.',',')} + (aseo ${fmtN.format(v.ase)} − subsidio ${fmtN.format(v.sub)}) × ${String(v.rep).replace('.',',')}%`;
   upsertLocal({...base,id:uid(),monto:v.inq,tercero:q.nombre,descripcion:det.slice(0,140)});
   if(v.casa>0)upsertLocal({...base,id:uid(),monto:v.casa,tercero:'',descripcion:'Energía: parte de la casa (recibo '+money(v.rec)+')'});
   closeForm();toast('Recibo registrado: '+q.nombre+' debe '+money(v.inq));render()}
+/* ---- Recibos de la casa ---- */
+function recHist(r){const by={};for(const m of nemAct()){if(m.tipo!=='gasto'||m.categoria!==r.nombre)continue;const k=m.fecha.slice(0,7);
+    const o=by[k]=by[k]||{ym:k,total:0,inq:0,fecha:m.fecha,cons:''};o.total+=+m.monto||0;if(m.tercero)o.inq+=+m.monto||0;if(m.fecha>o.fecha)o.fecha=m.fecha;
+    const c=(m.descripcion||'').match(/([\d.,]+)\s*(kWh|m³|m3)/i);if(c&&!o.cons)o.cons=c[1]+' '+c[2]}
+  return Object.values(by).sort((a,b)=>a.ym.localeCompare(b.ym))}
+function respLbl(r){if(r.calc==='energia')return r.resp?`${esc(r.resp)} paga su consumo · resto la casa`:'Lo paga la casa';return r.resp?`Lo paga ${esc(r.resp)} (nos devuelve)`:'Lo paga la casa'}
+function reciboCard(r,i){const H=recHist(r),last=H[H.length-1],prev=H.slice(-7,-1),avg=prev.length?prev.reduce((a,x)=>a+x.total,0)/prev.length:0;
+  const dd=last?days(parse(last.fecha),today()):null,pend=dd!==null&&dd>(+r.frec||1)*31+10;
+  const six=H.slice(-6),mx=Math.max(1,...six.map(x=>x.total));
+  let h=`<div class="card"><h2><span>${r.icono||'🧾'} ${esc(r.nombre)}</span><button class="btn sm" onclick="editRec(${i})" aria-label="Editar recibo">✏️</button></h2>
+  <div class="small muted" style="margin-top:-6px;margin-bottom:8px">${respLbl(r)}${+r.frec>1?' · cada '+r.frec+' meses':''}</div>`;
+  if(last){h+=`<div class="row sp"><div><div class="small muted">Último (${fmtD(parse(last.fecha))})</div><b style="font-size:20px">${money(last.total)}</b>${last.cons?` <span class="small muted">· ${esc(last.cons)}</span>`:''}</div>
+    ${avg?`<div style="text-align:right"><div class="small muted">Promedio anterior</div><b>${money(avg)}</b><div class="small ${last.total>avg*1.1?'gas':last.total<avg*.9?'ing':'muted'}">${last.total>=avg?'▲':'▼'} ${Math.abs(Math.round((last.total/avg-1)*100))}%</div></div>`:''}</div>`;
+    if(last.inq&&last.inq<last.total)h+=`<div class="small" style="margin-top:6px">${esc(r.resp||'Inquilino')}: <b class="warn">${money(last.inq)}</b> · Casa: <b>${money(last.total-last.inq)}</b></div>`;
+    if(six.length>1)h+=`<div class="vbars" style="height:70px;margin-top:8px">${six.map(x=>`<div class="g"><div class="pair"><i style="height:${x.total/mx*100}%;background:var(--pri);width:60%"></i></div><small>${MES[+x.ym.slice(5)-1]}</small></div>`).join('')}</div>`;
+    if(pend)h+=`<div class="alert" style="margin-top:8px">⏰ No hay recibo registrado hace ${dd} días.</div>`}
+  else h+=`<div class="small muted">Aún no hay recibos registrados.</div>`;
+  return h+`<div class="btns"><button class="btn pri" onclick="regRecibo(${i})">Registrar recibo</button></div></div>`}
+function regRecibo(i){const r=RECS()[i];if(!r)return;const qi=INQS().findIndex(q=>q.nombre===r.resp&&q.activo!==false);
+  if(r.calc==='energia'){if(qi>=0)return energia(qi,r.nombre);toast(r.resp?'No encuentro al inquilino "'+r.resp+'": revisa el nombre (✏️)':'Sin medidor asignado: se registra completo para la casa')}
+  const reemb=r.resp&&qi>=0&&r.calc==='total';
+  $('#sheetBody').innerHTML=`<div class="row sp"><h2 style="margin:0;font-size:18px">${r.icono||'🧾'} ${esc(r.nombre)}</h2><button class="btn sm" onclick="closeForm()">✕</button></div>
+  <div class="small muted" style="margin-top:6px">${reemb?`Se registra como pagado por la casa y queda <b>por cobrar a ${esc(r.resp)}</b>.`:'Se registra como gasto de la casa.'}</div>
+  <label>Valor del recibo</label><input id="rVal" class="money" inputmode="numeric" placeholder="$0" oninput="fmtInput(this)">
+  <div class="grid2">${r.unidad?`<div><label>Consumo (${esc(r.unidad)}) opcional</label><input id="rCon" inputmode="decimal"></div>`:''}
+  <div><label>Fecha de pago</label><input id="rFec" type="date" value="${iso(today())}"></div>
+  <div><label>Medio de pago</label><select id="rMed">${medios().map(m=>`<option ${m==='Transferencia / PSE'?'selected':''}>${esc(m)}</option>`).join('')}</select></div></div>
+  <label>Nota (opcional)</label><input id="rNot" placeholder="Ej: periodo oct–nov">
+  <div class="btns"><button class="btn pri" onclick="saveRecibo(${i})">Guardar</button></div>`;
+  $('#sheet').classList.remove('hidden');setTimeout(()=>{const x=$('#rVal');x&&x.focus()},150)}
+function saveRecibo(i){const r=RECS()[i],v=num($('#rVal').value);if(!r)return;if(!v)return toast('Escribe el valor del recibo');
+  const qi=INQS().findIndex(q=>q.nombre===r.resp&&q.activo!==false),reemb=r.resp&&qi>=0&&r.calc==='total';
+  const cons=$('#rCon')?$('#rCon').value.trim():'',nota=$('#rNot').value.trim(),now=Date.now();
+  upsertLocal({id:uid(),tipo:'gasto',caja:'nemesis',categoria:r.nombre,monto:v,medio:$('#rMed').value,persona:'Compartido',cuotas:1,fondo:'',fecha:$('#rFec').value||iso(today()),
+    tercero:reemb?r.resp:'',descripcion:[r.nombre,cons?cons.replace('.',',')+' '+r.unidad:'',nota].filter(Boolean).join(' · '),creado:now,actualizado:now,autor:local.yo,borrado:false,rec:''});
+  closeForm();toast(reemb?r.resp+' debe '+money(v)+' de '+r.nombre:'Recibo registrado ✓');render()}
+function editRec(i){const r=i===null?{id:uid(),nombre:'',icono:'🧾',calc:'total',resp:'',frec:1,unidad:''}:{...RECS()[i]};
+  $('#sheetBody').innerHTML=`<div class="row sp"><h2 style="margin:0;font-size:18px">${i===null?'Nuevo recibo':'Editar recibo'}</h2><button class="btn sm" onclick="closeForm()">✕</button></div>
+  <div class="grid2"><div><label>Nombre</label><input id="kNom" value="${esc(r.nombre)}" placeholder="Ej: Internet"></div><div><label>Ícono</label><input id="kIco" value="${esc(r.icono||'')}" maxlength="4"></div></div>
+  <label>¿Quién lo paga?</label><select id="kRes"><option value="">La casa</option>${INQS().filter(q=>q.activo!==false||q.nombre===r.resp).map(q=>`<option ${q.nombre===r.resp?'selected':''} value="${esc(q.nombre)}">${esc(q.nombre)}${q.unidad?' · '+esc(q.unidad):''} (nos devuelve)</option>`).join('')}
+  ${r.resp&&!INQS().some(q=>q.nombre===r.resp)?`<option selected value="${esc(r.resp)}">${esc(r.resp)} (no existe aún)</option>`:''}</select>
+  <label>Cálculo</label><select id="kCal"><option value="total">El recibo completo</option><option value="energia" ${r.calc==='energia'?'selected':''}>Por medidor (consumo × kWh + aseo/subsidio)</option></select>
+  <div class="grid2"><div><label>Llega cada</label><select id="kFre">${[[1,'mes'],[2,'2 meses'],[3,'3 meses'],[12,'año']].map(([v,l])=>`<option value="${v}" ${+r.frec===v?'selected':''}>${l}</option>`).join('')}</select></div>
+  <div><label>Unidad de consumo</label><input id="kUni" value="${esc(r.unidad||'')}" placeholder="kWh, m³ o vacío"></div></div>
+  <div class="btns">${i===null?'':`<button class="btn del" onclick="delRec(${i})">Quitar</button>`}<button class="btn pri" onclick="saveRec(${i===null?'null':i})">Guardar</button></div>`;
+  $('#sheet').classList.remove('hidden')}
+function saveRec(i){const nom=$('#kNom').value.trim();if(!nom)return toast('Escribe el nombre');const L=RECS().slice();
+  if(L.some((x,k)=>k!==i&&x.nombre.toLowerCase()===nom.toLowerCase()))return toast('Ya existe un recibo con ese nombre');
+  const old=i===null?null:L[i],r={...(old||{id:uid()}),nombre:nom,icono:$('#kIco').value.trim()||'🧾',resp:$('#kRes').value,calc:$('#kCal').value,frec:+$('#kFre').value||1,unidad:$('#kUni').value.trim()};
+  if(old&&old.nombre!==nom){renameRefs('categoria',old.nombre,nom);const NG=config.nemesis.categoriasGasto;const k=NG.indexOf(old.nombre);if(k>=0)NG[k]=nom}
+  if(!config.nemesis.categoriasGasto.includes(nom))config.nemesis.categoriasGasto.unshift(nom);
+  if(i===null)L.push(r);else L[i]=r;config.nemesis.recibos=L;touchConfig();closeForm();toast('Recibo guardado ✓');render()}
+function delRec(i){const r=RECS()[i];if(!r||!confirm('¿Quitar "'+r.nombre+'" de la lista? Los recibos ya registrados se conservan.'))return;config.nemesis.recibos=RECS().filter((x,k)=>k!==i);touchConfig();closeForm();render()}
 function editInq(i){const q=i===null?{id:uid(),nombre:'',unidad:'',arriendo:0,dia:5,contrato:'',servicios:'reembolsa',cobrarDesde:iso(today()).slice(0,7),atrasoInicial:0,activo:true,cambios:[]}:{...INQS()[i]};
   $('#sheetBody').innerHTML=`<div class="row sp"><h2 style="margin:0;font-size:18px">${i===null?'Nuevo inquilino':'Editar inquilino'}</h2><button class="btn sm" onclick="closeForm()">✕</button></div>
   <div class="grid2"><div><label>Nombre</label><input id="qNom" value="${esc(q.nombre)}" placeholder="Ej: Pedro"></div><div><label>Unidad (opcional)</label><input id="qUni" value="${esc(q.unidad||'')}" placeholder="Ej: Apto 201, piso 2"></div>
@@ -693,6 +764,16 @@ function vNemesis(){
   <hr><div class="row sp"><span class="small muted">Utilidad neta desde ${MES[+ini.slice(5,7)-1]} ${yy}</span><b class="${UA.neta<0?'gas':'ing'}">${money(UA.neta)}</b></div>
   <div class="small muted">≈ ${money(UA.neta/mesesAno)} al mes · no cuenta préstamos, ahorros ni servicios que devuelve el inquilino.</div>
   <div class="small muted" style="margin-top:8px">Caja = saldo inicial + arriendos y abonos − gastos, préstamos y ahorros de la casa.</div></div>`;
+  const SECS=[['recibos','🧾 Recibos'],['arriendos','👥 Arriendos'],['mas','🤝 Préstamos y fondos'],['movs','📋 Movimientos']];
+  h+=`<div class="chips" style="margin-bottom:12px">${SECS.map(([k,l])=>`<button class="${nemSec===k?'on':''}" onclick="nemSec='${k}';render()">${l}</button>`).join('')}</div>`;
+  if(nemSec==='recibos'){
+    const yS=yy+'-01-01',GR=nemAct().filter(m=>m.tipo==='gasto'&&m.fecha>=yS&&RECS().some(r=>r.nombre===m.categoria));
+    const casa=GR.filter(m=>!m.tercero).reduce((a,m)=>a+(+m.monto||0),0),inq=GR.filter(m=>m.tercero).reduce((a,m)=>a+(+m.monto||0),0);
+    h+=`<div class="card"><h2>🧾 Recibos ${yy}</h2><div class="grid2"><div class="stat"><span class="small muted">Asumidos por la casa</span><b class="gas">${money(casa)}</b></div>
+      <div class="stat"><span class="small muted">A cargo de inquilinos</span><b class="warn">${money(inq)}</b></div></div></div>`;
+    h+=RECS().map(reciboCard).join('')+`<button class="btn" style="width:100%;margin-bottom:12px" onclick="editRec(null)">+ Agregar otro recibo</button>`;
+    return h}
+  if(nemSec==='arriendos'){
   // inquilinos
   const QA=INQS();
   h+=`<div class="card"><h2>👥 Inquilinos <span class="small muted">${money(A.mto)}/mes</span></h2>${QA.map((q,i)=>q.activo===false?'':inqCard(q,i)).join('')||'<div class="small muted">Agrega a cada inquilino con su arriendo, día de pago, fecha del contrato y cómo maneja los servicios.</div>'}
@@ -700,15 +781,18 @@ function vNemesis(){
     ${QA.some(q=>q.activo===false)?`<div class="small muted" style="margin-top:8px">Anteriores: ${QA.map((q,i)=>q.activo===false?`<a href="#" onclick="editInq(${i});return false">${esc(q.nombre)}</a>`:'').filter(Boolean).join(' · ')}</div>`:''}</div>`;
   const huer=nemAct().filter(m=>m.tercero===INQ);
   if(huer.length)h+=`<div class="alert">Hay ${huer.length} movimientos de servicios sin inquilino asignado. Tócalos en la lista y elige el inquilino.</div>`;
+  h+=fijosCard('nemesis');
+  return h}
+  if(nemSec==='mas'){
   // préstamos
   h+=`<div class="card"><h2>🤝 Préstamos con plata de la casa</h2>${P.list.length?P.list.map(([p,v])=>`<div class="fx"><div class="mid" style="flex:1"><div><b>${esc(p)}</b></div>
     <div class="small ${v>0?'warn':'ing'}">${v>0?'Debe '+money(v):'A favor '+money(-v)}</div></div>
     <button class="btn sm" onclick="openForm(null,${js({tipo:'abono',caja:'nemesis',tercero:p,persona:'Compartido'})})">🔙 Abono</button>
     <button class="btn sm" onclick="openForm(null,${js({tipo:'prestamo',caja:'nemesis',tercero:p,persona:'Compartido'})})">+ Prestar</button></div>`).join(''):'<div class="small muted">No hay préstamos pendientes.</div>'}
     <div class="btns"><button class="btn" onclick="openForm(null,${js({tipo:'prestamo',caja:'nemesis',persona:'Compartido'})})">🤝 Nuevo préstamo</button></div></div>`;
-  h+=fijosCard('nemesis');
   // fondos
   h+=F.map(f=>fondoCard(f,'nemesis')).join('')||`<div class="card small muted">Creen fondos para el predial y otros impuestos en <b>Ajustes → Fondos</b>, eligiendo "${esc(NN())}".</div>`;
+  return h}
   // ciclo
   const c=cycleAt(cycleOff),L=inCycle(c,nemAct()),t=totals(L);
   const UC=utilidad(L);
@@ -788,7 +872,7 @@ function vAjustes(){
   <div class="btns"><button class="btn" onclick="document.getElementById('imp').click()">Restaurar copia</button></div>
   <div class="btns"><button class="btn del" onclick="borrarTodo()">🗑️ Borrar todos los movimientos</button></div>
   <input type="file" id="imp" accept=".json" style="display:none" onchange="importJSON(this.files[0])">
-  <div class="small muted" style="margin-top:8px">Versión 1.6 · Los datos se guardan en este celular y en su Google Sheet.</div></div>`;
+  <div class="small muted" style="margin-top:8px">Versión 1.7 · Los datos se guardan en este celular y en su Google Sheet.</div></div>`;
 }
 const tcRow=t=>`<div class="erow tc rrow" data-old="${esc(t.nombre||'')}" style="display:block"><div class="g" style="grid-template-columns:1fr 36px"><input placeholder="Nombre de la tarjeta" value="${esc(t.nombre||'')}" data-k="nombre"><button class="x" onclick="this.closest('.erow').remove()" aria-label="Quitar tarjeta">✕</button></div>
   <div class="g" style="grid-template-columns:1.3fr .8fr .8fr 1.3fr;margin-top:6px"><select data-k="titular" aria-label="Titular">${config.personas.map(p=>`<option ${t.titular===p?'selected':''}>${esc(p)}</option>`).join('')}</select>

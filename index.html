@@ -151,7 +151,7 @@ const DEFAULT_CONFIG={
   presupuestos:{}, // categoria -> tope mensual
   fondos:[{nombre:'Fondo de emergencia',meta:0}],
   recurrentes:[], // {id,nombre,tipo,monto,persona,categoria,medio,fondo,dia,caja}
-  nemesis:{nombre:'Casa en arriendo',arriendo:0,dia:5,inicio:'',saldoInicial:0,porCobrarInicial:0,
+  nemesis:{nombre:'Casa en arriendo',arriendo:0,dia:5,inicio:'',saldoInicial:0,porCobrarInicial:0,inquilinos:[],ipc:{2026:5.1},
     categoriasGasto:['Servicios públicos','Reparaciones y mantenimiento','Impuesto predial','Otros impuestos y seguros','Otros'],
     categoriasIngreso:['Arriendo',REEMB_DEF,'Otros ingresos']}
 };
@@ -167,6 +167,10 @@ function migrar(){let ch=false;const N=config.nemesis;
   if(!N||N.activo===undefined){config.nemesis={...DEFAULT_CONFIG.nemesis,...(N||{})};
     if(+config.arriendoMensual&&!config.nemesis.arriendo){config.nemesis={...config.nemesis,activo:true,arriendo:+config.arriendoMensual,nombre:/n[eé]mesis/i.test(JSON.stringify(config.categoriasIngreso))?'Casa Némesis':'Casa en arriendo',inicio:iso(today()).slice(0,7)}}
     ch=true}
+  if(!Array.isArray(config.nemesis.inquilinos)||(!config.nemesis.inquilinos.length&&+config.nemesis.arriendo&&!config.nemesis.inqMig)){config.nemesis.inquilinos=[];config.nemesis.inqMig=true;
+    if(+config.nemesis.arriendo)config.nemesis.inquilinos.push({id:'inq1',nombre:'Inquilino 1',unidad:'',arriendo:+config.nemesis.arriendo,dia:+config.nemesis.dia||5,contrato:'',
+      servicios:'reembolsa',cobrarDesde:config.nemesis.inicio||iso(today()).slice(0,7),atrasoInicial:+config.nemesis.porCobrarInicial||0,activo:true,cambios:[]});ch=true}
+  if(!config.nemesis.ipc){config.nemesis.ipc={2026:5.1};ch=true}
   const NI=config.nemesis.categoriasIngreso||(config.nemesis.categoriasIngreso=['Arriendo','Otros ingresos']);
   if(!NI.includes(REEMB_DEF)){NI.splice(1,0,REEMB_DEF);ch=true}
   if(config.nemesis.activo&&!config.fondos.some(f=>f.caja==='nemesis')){config.fondos.push({nombre:'Predial '+(config.nemesis.nombre||'casa').replace(/^Casa\s+/i,''),meta:0,caja:'nemesis'});ch=true}
@@ -196,8 +200,11 @@ const TIPOS={gasto:{n:'Gasto',i:'🧾',c:'gas',s:-1},ingreso:{n:'Ingreso',i:'�
   prestamo:{n:'Préstamo',i:'🤝',c:'warn',s:-1},abono:{n:'Abono préstamo',i:'🔙',c:'ing',s:1}};
 const isN=m=>m.caja==='nemesis';
 const INQ='Inquilino (servicios)',REEMB='Reembolso de servicios';
-const esReemb=m=>isN(m)&&((m.tipo==='gasto'&&m.tercero===INQ)||(m.tipo==='ingreso'&&m.categoria===REEMB));
 const esServ=c=>/servicio/i.test(c||'');
+const esArr=c=>/arriendo/i.test(c||'');
+const esReemb=m=>isN(m)&&((m.tipo==='gasto'&&!!m.tercero&&esServ(m.categoria))||(m.tipo==='ingreso'&&m.categoria===REEMB));
+const INQS=()=>((config.nemesis&&config.nemesis.inquilinos)||[]);
+const INQA=()=>INQS().filter(q=>q.activo!==false);
 const NEM=()=>!!(config.nemesis&&config.nemesis.activo);
 const NN=()=>(config.nemesis&&config.nemesis.nombre)||'Casa en arriendo';
 const hogarAct=()=>active().filter(m=>!isN(m));
@@ -325,15 +332,18 @@ function parseSeg(seg){
   if(it.tipo==='ingreso'||it.tipo==='ahorro'||it.tipo==='retiro')it.medio='';
   if(!esTarjeta(it.medio))it.cuotas=1;
   const words=n.split(/[^a-z0-9ñ]+/).filter(Boolean);
-  if(NEM()&&(/\b(nemesis|casa del barrio|inquilin[oa]|predial)\b/.test(n)||(it.tipo==='ingreso'&&/\barriendo\b/.test(n))))it.caja='nemesis';else it.caja='';
+  const qHit=NEM()?INQS().slice().sort((a,b)=>(b.activo!==false)-(a.activo!==false)).find(q=>q.nombre&&new RegExp('\\b'+nz(q.nombre)+'\\b').test(n)):null;
+  if(NEM()&&(qHit||/\b(nemesis|casa del barrio|inquilin[oa]|predial)\b/.test(n)||(it.tipo==='ingreso'&&/\barriendo\b/.test(n))))it.caja='nemesis';else it.caja='';
   if(it.caja==='nemesis'&&/\b(devolvio|reembols\w*|pago los servicios|pago servicios)\b/.test(n)&&/\b(servicio|servicios|luz|agua|gas|reembols\w*)\b/.test(n)){it.tipo='ingreso';it._reemb=true}
   if(it.tipo==='prestamo'||it.tipo==='abono'){it.medio='';const T=terceros();
     it.tercero=T.find(x=>new RegExp('\\b'+nz(x)+'\\b').test(n))||((n.match(/\b(?:preste|presto|prestamo)\s+(?:a\s+)?(?:(?:mi|la|el|don|dona)\s+)?([a-zñ]{3,})/)||[])[1]||(n.match(/\b([a-zñ]{3,})\s+(?:me\s+)?(?:devolvio|abono|pago el prestamo)/)||[])[1]||'');
     if(['me','le','ya','hoy','plata'].includes(it.tercero))it.tercero='';
     if(it.tercero&&!T.includes(it.tercero))it.tercero=it.tercero[0].toUpperCase()+it.tercero.slice(1)}
   if(it.tipo==='gasto'||it.tipo==='ingreso')it.categoria=guessCat(words,it.tipo,it.caja);
-  if(it._reemb){it.categoria=REEMB;it.tercero=INQ;delete it._reemb}
-  else if(it.caja==='nemesis'&&it.tipo==='gasto'&&esServ(it.categoria))it.tercero=INQ;
+  if(it._reemb){it.categoria=REEMB;delete it._reemb}
+  if(it.caja==='nemesis'){const one=INQA().filter(q=>(q.servicios||'reembolsa')==='reembolsa');
+    if(it.tipo==='ingreso'&&(esArr(it.categoria)||it.categoria===REEMB))it.tercero=qHit?qHit.nombre:(INQA().length===1?INQA()[0].nombre:'');
+    else if(it.tipo==='gasto'&&esServ(it.categoria))it.tercero=qHit&&(qHit.servicios||'reembolsa')==='reembolsa'?qHit.nombre:(one.length===1&&INQA().length===1?one[0].nombre:'')}
   if(it.tipo==='ahorro'||it.tipo==='retiro'){const f=config.fondos.find(f=>/nemesis|predial/.test(nz(f.nombre))===(it.caja==='nemesis')&&nz(f.nombre).split(/\s+/).some(w=>w.length>=4&&words.includes(w)))||config.fondos.find(f=>nz(f.nombre).split(/\s+/).some(w=>w.length>=4&&words.includes(w)));it.fondo=(f||config.fondos[0]||{}).nombre||''}
   // descripción: texto original sin el monto
   let d=seg.replace(/,?\s*(el\s+)?\d{1,2}\/\d{1,2}(\/\d{2,4})?(\s+a las\s+\d{1,2}:\d{2}(:\d{2})?)?/gi,' ').replace(/\*\d+/g,'').replace(/\b(a\s+)?\d{1,2}\s*cuotas?\b/gi,' ')
@@ -349,7 +359,7 @@ function parseQuick(text){const out=[];
     if(parts.length>1&&parts.every(p=>/\d/.test(p)))parts.forEach(p=>out.push(parseSeg(p)));else out.push(parseSeg(seg))}
   return out.filter(x=>x.monto>0||x.descripcion)}
 let qItems=[];
-function qValid(m){return m.monto>0&&((m.tipo!=='prestamo'&&m.tipo!=='abono')||m.tercero)&&((m.tipo!=='gasto'&&m.tipo!=='ingreso')||m.categoria)&&((m.tipo!=='ahorro'&&m.tipo!=='retiro')||m.fondo)&&(m.tipo!=='pago_tc'||m.medio)}
+function qValid(m){if(m.caja==='nemesis'&&INQA().length&&m.tipo==='ingreso'&&(esArr(m.categoria)||m.categoria===REEMB)&&!m.tercero)return false;return m.monto>0&&((m.tipo!=='prestamo'&&m.tipo!=='abono')||m.tercero)&&((m.tipo!=='gasto'&&m.tipo!=='ingreso')||m.categoria)&&((m.tipo!=='ahorro'&&m.tipo!=='retiro')||m.fondo)&&(m.tipo!=='pago_tc'||m.medio)}
 function quickParse(){const v=$('#qIn').value.trim();if(!v)return toast('Escribe o dicta un gasto');
   qItems=parseQuick(v).map(x=>({...x,id:uid()}));if(!qItems.length)return toast('No encontré montos en el texto');drawQuick()}
 function drawQuick(){const o=$('#qOut');if(!o)return;if(!qItems.length){o.innerHTML='';return}
@@ -560,15 +570,76 @@ function promGastos(){const v=[];for(let i=1;i<=3;i++){const t=totals(inCycle(cy
   if(!v.length){const t=totals(inCycle(cycleAt(0)));if(t.gas)v.push(t.gas)}return v.length?v.reduce((a,b)=>a+b,0)/v.length:0}
 /* ================== Casa en arriendo (Némesis) ================== */
 function nemCaja(){const N=config.nemesis||{};return nemAct().reduce((a,m)=>a+(TIPOS[m.tipo]?.s||0)*(m.tipo==='pago_tc'?0:(+m.monto||0)),+N.saldoInicial||0)}
-function arrStatus(){const N=config.nemesis||{},t=today(),mto=+N.arriendo||0,dia=+N.dia||1;
-  let ini=N.inicio||iso(t).slice(0,7);const[y0,m0]=ini.split('-').map(Number);
-  let k=0,d=dayIn(y0,m0-1,dia);while(d<=t&&k<600){k++;d=dayIn(y0,m0-1+k,dia)}
+/* ---- Inquilinos ---- */
+const ymOf=d=>iso(d).slice(0,7);
+function valorEn(q,ym){const C=(q.cambios||[]).slice().sort((a,b)=>a.desde.localeCompare(b.desde));if(!C.length)return+q.arriendo||0;
+  let v=+C[0].anterior||+q.arriendo||0;for(const c of C)if(c.desde<=ym)v=+c.valor;return v}
+function aniv(q){if(!q.contrato)return null;const c=parse(q.contrato),t=today();let d=new Date(t.getFullYear(),c.getMonth(),Math.min(c.getDate(),dim(t.getFullYear(),c.getMonth())));
+  if(d<t)d=new Date(t.getFullYear()+1,c.getMonth(),Math.min(c.getDate(),dim(t.getFullYear()+1,c.getMonth())));
+  const hecho=(q.cambios||[]).some(x=>x.desde===ymOf(d));const ipc=(config.nemesis.ipc||{})[d.getFullYear()];
+  const base=valorEn(q,ymOf(new Date(d.getFullYear(),d.getMonth()-1,1)));
+  return{fecha:d,dias:days(t,d),hecho,ipc,base,sug:ipc!==undefined?Math.floor(base*(1+ipc/100)/100)*100:null,anios:d.getFullYear()-c.getFullYear()}}
+function inqStatus(q){const t=today(),dia=+q.dia||1,ini=q.cobrarDesde||iso(t).slice(0,7);const[y0,m0]=ini.split('-').map(Number);
+  let k=0,d=dayIn(y0,m0-1,dia),esperado=+q.atrasoInicial||0;while(d<=t&&k<600){esperado+=valorEn(q,ymOf(d));k++;d=dayIn(y0,m0-1+k,dia)}
   const next=d,last=k?dayIn(y0,m0-2+k,dia):null;
-  const rec=nemAct().filter(m=>m.tipo==='ingreso'&&/arriendo/i.test(m.categoria)&&m.fecha>=ini+'-01').reduce((a,m)=>a+(+m.monto||0),0);
-  const esperado=k*mto+(+N.porCobrarInicial||0);
-  const mesAct=last?nemAct().filter(m=>m.tipo==='ingreso'&&/arriendo/i.test(m.categoria)&&m.fecha>=iso(last)&&m.fecha<iso(next)).reduce((a,m)=>a+(+m.monto||0),0):0;
-  return{porCobrar:Math.max(0,esperado-rec),adelanto:Math.max(0,rec-esperado),next,last,mesAct,mto,rec,esperado}}
-function servPorCobrar(){return nemAct().reduce((a,m)=>a+(m.tipo==='gasto'&&m.tercero===INQ?1:m.tipo==='ingreso'&&m.categoria===REEMB?-1:0)*(+m.monto||0),0)}
+  const mine=nemAct().filter(m=>m.tercero===q.nombre);
+  const rec=mine.filter(m=>m.tipo==='ingreso'&&esArr(m.categoria)&&m.fecha>=ini+'-01').reduce((a,m)=>a+(+m.monto||0),0);
+  const mesAct=last?mine.filter(m=>m.tipo==='ingreso'&&esArr(m.categoria)&&m.fecha>=iso(last)&&m.fecha<iso(next)).reduce((a,m)=>a+(+m.monto||0),0):0;
+  const serv=mine.reduce((a,m)=>a+(m.tipo==='gasto'&&esServ(m.categoria)?1:m.tipo==='ingreso'&&m.categoria===REEMB?-1:0)*(+m.monto||0),0);
+  return{porCobrar:Math.max(0,esperado-rec),adelanto:Math.max(0,rec-esperado),next,last,mesAct,canon:valorEn(q,ymOf(t)),canonMes:last?valorEn(q,ymOf(last)):valorEn(q,ymOf(t)),serv,aniv:aniv(q)}}
+function arrStatus(){const r={porCobrar:0,adelanto:0,mto:0,n:0};for(const q of INQA()){const S=inqStatus(q);r.porCobrar+=S.porCobrar;r.adelanto+=S.adelanto;r.mto+=S.canon;r.n++}return r}
+function servPorCobrar(nombre){return nemAct().reduce((a,m)=>a+((nombre===undefined?!!m.tercero:m.tercero===nombre)?(m.tipo==='gasto'&&esServ(m.categoria)?1:m.tipo==='ingreso'&&m.categoria===REEMB?-1:0):0)*(+m.monto||0),0)}
+function inqCard(q,i){const S=inqStatus(q),A=S.aniv,dn=days(today(),S.next);
+  const sv={incluidos:'Servicios incluidos',reembolsa:'Nos devuelve servicios',directo:'Paga servicios directo'}[q.servicios||'reembolsa'];
+  let h=`<div class="rrow" style="padding:12px"><div class="row sp"><div><b>${esc(q.nombre)}</b>${q.unidad?` <span class="small muted">· ${esc(q.unidad)}</span>`:''}
+    <div class="small muted">${money(S.canon)}/mes · paga el día ${q.dia} · ${sv}</div></div><button class="btn sm" onclick="editInq(${i})" aria-label="Editar inquilino">✏️</button></div>`;
+  h+=S.porCobrar>0?`<div class="alert ${S.porCobrar>S.canon?'bad':''}" style="margin-top:8px">Debe <b>${money(S.porCobrar)}</b> de arriendo</div>`
+    :S.adelanto>0?`<div class="alert good" style="margin-top:8px">Adelantado ${money(S.adelanto)} ✓</div>`:`<div class="alert good" style="margin-top:8px">Arriendo al día ✓</div>`;
+  if(S.last)h+=barRow('Pagado del mes ('+fmtD(S.last)+')',S.mesAct,S.canonMes,S.mesAct>=S.canonMes?'var(--ing)':'var(--warn)',money(S.mesAct)+' / '+money(S.canonMes));
+  h+=`<div class="small muted">Próximo cobro: ${fmtD(S.next)} (${dn===0?'hoy':dn===1?'mañana':'en '+dn+' días'})</div>`;
+  if((q.servicios||'reembolsa')==='reembolsa'&&S.serv)h+=`<div class="small ${S.serv>0?'warn':'ing'}" style="margin-top:4px">${S.serv>0?'Servicios por devolver: <b>'+money(S.serv)+'</b>':'Servicios: saldo a su favor '+money(-S.serv)}</div>`;
+  if(A){if(A.hecho)h+=`<div class="small ing" style="margin-top:4px">📈 Aumento del ${fmtD(A.fecha)} ${A.fecha.getFullYear()} ya aplicado ✓</div>`;
+    else if(A.dias<=60)h+=`<div class="alert" style="margin-top:8px">📈 <b>Cumple ${A.anios>0?A.anios+(A.anios>1?' años':' año'):'año'} el ${fmtD(A.fecha)}</b> (${A.dias===0?'hoy':'en '+A.dias+' días'}).
+      ${A.sug!==null?`Puede subir hasta el IPC (${String(A.ipc).replace('.',',')}%): de ${money(A.base)} a <b>${money(A.sug)}</b>.`:`Falta el IPC de ${A.fecha.getFullYear()-1} en Ajustes para calcular el aumento.`}
+      Avísenle por escrito antes de aplicarlo.<div class="btns"><button class="btn sm" onclick="aumentoInq(${i})">Aplicar aumento</button></div></div>`;
+    else h+=`<div class="small muted" style="margin-top:4px">📅 Aniversario del contrato: ${fmtD(A.fecha)} ${A.fecha.getFullYear()}</div>`}
+  else h+=`<div class="small muted" style="margin-top:4px">📅 Agrega la fecha del contrato (✏️) para avisarte del aumento anual.</div>`;
+  const P={caja:'nemesis',tercero:q.nombre,persona:'Compartido'};
+  h+=`<div class="btns" style="flex-wrap:wrap"><button class="btn sm pri" onclick="openForm(null,${js({...P,tipo:'ingreso',categoria:catsFor('ingreso','nemesis').find(esArr)||'Arriendo',descripcion:'Arriendo '+q.nombre,monto:Math.min(S.porCobrar||S.canon,S.canon)})})">💰 Pagó arriendo</button>
+    ${(q.servicios||'reembolsa')==='reembolsa'?`<button class="btn sm" onclick="openForm(null,${js({...P,tipo:'gasto',categoria:catsFor('gasto','nemesis').find(esServ)||'',descripcion:'Servicios '+q.nombre})})">🧾 Pagamos servicio</button>
+    ${S.serv>0?`<button class="btn sm" onclick="openForm(null,${js({...P,tipo:'ingreso',categoria:REEMB,descripcion:'Reembolso servicios '+q.nombre,monto:S.serv})})">💵 Devolvió servicios</button>`:''}`:''}</div></div>`;
+  return h}
+function editInq(i){const q=i===null?{id:uid(),nombre:'',unidad:'',arriendo:0,dia:5,contrato:'',servicios:'reembolsa',cobrarDesde:iso(today()).slice(0,7),atrasoInicial:0,activo:true,cambios:[]}:{...INQS()[i]};
+  $('#sheetBody').innerHTML=`<div class="row sp"><h2 style="margin:0;font-size:18px">${i===null?'Nuevo inquilino':'Editar inquilino'}</h2><button class="btn sm" onclick="closeForm()">✕</button></div>
+  <div class="grid2"><div><label>Nombre</label><input id="qNom" value="${esc(q.nombre)}" placeholder="Ej: Pedro"></div><div><label>Unidad (opcional)</label><input id="qUni" value="${esc(q.unidad||'')}" placeholder="Ej: Apto 201, piso 2"></div>
+  <div><label>Arriendo actual</label><input id="qArr" inputmode="numeric" value="${+q.arriendo?fmtN.format(valorEn(q,iso(today()).slice(0,7))):''}" oninput="fmtInput(this)"></div><div><label>Día de pago</label><input id="qDia" type="number" min="1" max="31" value="${q.dia||5}"></div>
+  <div><label>Inicio del contrato</label><input id="qCon" type="date" value="${esc(q.contrato||'')}"></div><div><label>Cobrar en la app desde</label><input id="qDes" type="month" value="${esc(q.cobrarDesde||'')}"></div></div>
+  <label>Servicios públicos</label><select id="qSer"><option value="reembolsa" ${q.servicios==='reembolsa'?'selected':''}>Los pagamos y nos los devuelve</option>
+  <option value="incluidos" ${q.servicios==='incluidos'?'selected':''}>Incluidos en el arriendo (los asume la casa)</option><option value="directo" ${q.servicios==='directo'?'selected':''}>Los paga él directamente</option></select>
+  <label>Arriendo atrasado antes de empezar (opcional)</label><input id="qAtr" inputmode="numeric" value="${+q.atrasoInicial?fmtN.format(q.atrasoInicial):''}" oninput="fmtInput(this)">
+  <div class="small muted" style="margin-top:6px">La fecha de inicio del contrato define el mes del aumento anual. "Cobrar desde" es el primer mes que la app empieza a contar.</div>
+  ${(q.cambios||[]).length?`<div class="small" style="margin-top:8px"><b>Historial de aumentos:</b> ${(q.cambios||[]).map(c=>c.desde+': '+money(c.anterior)+' → '+money(c.valor)).join(' · ')}</div>`:''}
+  <div class="btns">${i===null?'':`<button class="btn del" onclick="bajaInq(${i})">${q.activo===false?'Reactivar':'Ya no vive ahí'}</button>`}<button class="btn pri" onclick="saveInq(${i===null?'null':i},${js(q.id)})">Guardar</button></div>`;
+  $('#sheet').classList.remove('hidden')}
+function saveInq(i,id){const nom=$('#qNom').value.trim();if(!nom)return toast('Escribe el nombre');
+  const L=INQS();if(L.some((x,k)=>k!==i&&x.nombre.toLowerCase()===nom.toLowerCase()))return toast('Ya hay un inquilino con ese nombre');
+  const old=i===null?null:L[i],arr=num($('#qArr').value);if(!arr)return toast('Escribe el valor del arriendo');
+  const q={...(old||{id,cambios:[],activo:true}),nombre:nom,unidad:$('#qUni').value.trim(),dia:Math.min(31,Math.max(1,+$('#qDia').value||5)),contrato:$('#qCon').value||'',
+    cobrarDesde:$('#qDes').value||iso(today()).slice(0,7),servicios:$('#qSer').value,atrasoInicial:num($('#qAtr').value)};
+  if(!old||!(old.cambios||[]).length)q.arriendo=arr;else if(arr!==valorEn(old,iso(today()).slice(0,7))){q.cambios=[...q.cambios,{desde:iso(today()).slice(0,7),anterior:valorEn(old,iso(today()).slice(0,7)),valor:arr}];q.arriendo=arr}
+  if(old&&old.nombre!==nom)renameRefs('tercero',old.nombre,nom);
+  if(i===null)L.push(q);else L[i]=q;config.nemesis.inquilinos=L;touchConfig();closeForm();toast('Inquilino guardado ✓');render()}
+function bajaInq(i){const q=INQS()[i];if(!q)return;if(q.activo!==false&&!confirm('¿'+q.nombre+' ya no vive ahí? Se deja de cobrar su arriendo, pero se conserva su historial.'))return;
+  q.activo=q.activo===false;touchConfig();closeForm();render()}
+function aumentoInq(i){const q=INQS()[i],A=aniv(q);if(!q||!A)return;
+  $('#sheetBody').innerHTML=`<div class="row sp"><h2 style="margin:0;font-size:18px">📈 Aumento de ${esc(q.nombre)}</h2><button class="btn sm" onclick="closeForm()">✕</button></div>
+  <div class="small muted" style="margin-top:8px">La ley permite subir el arriendo de vivienda una vez cada 12 meses, máximo el IPC del año anterior${A.ipc!==undefined?` (${String(A.ipc).replace('.',',')}%)`:''}. Se puede pactar un aumento menor.</div>
+  <label>Nuevo arriendo desde ${MES[A.fecha.getMonth()]} ${A.fecha.getFullYear()}</label><input id="qNew" class="money" inputmode="numeric" value="${fmtN.format(A.sug||A.base)}" oninput="fmtInput(this)">
+  <div class="small muted" style="margin-top:6px">Arriendo actual: ${money(A.base)}${A.sug?` · Máximo con IPC: ${money(A.sug)}`:''}</div>
+  <div class="btns"><button class="btn pri" onclick="aplicarAumento(${i})">Aplicar</button></div>`;$('#sheet').classList.remove('hidden')}
+function aplicarAumento(i){const q=INQS()[i],A=aniv(q),v=num($('#qNew').value);if(!q||!A||!v)return;
+  if(A.sug&&v>A.sug&&!confirm('El valor supera el máximo legal con IPC ('+money(A.sug)+'). ¿Aplicarlo igual?'))return;
+  q.cambios=[...(q.cambios||[]).filter(c=>c.desde!==ymOf(A.fecha)),{desde:ymOf(A.fecha),anterior:A.base,valor:v}];q.arriendo=v;touchConfig();closeForm();toast('Aumento programado ✓');render()}
 function utilidad(list){let ing=0,gas=0;for(const m of list){if(esReemb(m))continue;const v=+m.monto||0;if(m.tipo==='ingreso')ing+=v;else if(m.tipo==='gasto')gas+=v}return{ing,gas,neta:ing-gas}}
 function prestSaldos(caja){const o={};for(const m of active()){if(m.tipo!=='prestamo'&&m.tipo!=='abono')continue;if((isN(m)?'nemesis':'hogar')!==caja)continue;
   const k=m.tercero||'(sin nombre)';o[k]=(o[k]||0)+(m.tipo==='prestamo'?1:-1)*(+m.monto||0)}
@@ -585,20 +656,13 @@ function vNemesis(){
   <hr><div class="row sp"><span class="small muted">Utilidad neta desde ${MES[+ini.slice(5,7)-1]} ${yy}</span><b class="${UA.neta<0?'gas':'ing'}">${money(UA.neta)}</b></div>
   <div class="small muted">≈ ${money(UA.neta/mesesAno)} al mes · no cuenta préstamos, ahorros ni servicios que devuelve el inquilino.</div>
   <div class="small muted" style="margin-top:8px">Caja = saldo inicial + arriendos y abonos − gastos, préstamos y ahorros de la casa.</div></div>`;
-  // arriendo
-  if(A.mto){const dn=days(today(),A.next);
-    h+=`<div class="card"><h2>💰 Arriendo <span class="small muted">${money(A.mto)}/mes · día ${N.dia}</span></h2>
-    ${A.last?barRow('Recibido del mes ('+fmtD(A.last)+')',A.mesAct,A.mto,A.mesAct>=A.mto?'var(--ing)':'var(--warn)',money(A.mesAct)+' / '+money(A.mto)):''}
-    ${A.porCobrar>0?`<div class="alert ${A.porCobrar>A.mto?'bad':''}">Les deben <b>${money(A.porCobrar)}</b> de arriendo en total.</div>`:A.adelanto>0?`<div class="alert good">Pagado por adelantado: ${money(A.adelanto)}</div>`:`<div class="alert good">Arriendo al día ✓</div>`}
-    <div class="small muted">Próximo cobro: ${fmtD(A.next)} (${dn===0?'hoy':'en '+dn+' días'})</div>
-    <div class="btns"><button class="btn pri" onclick="openForm(null,${js({tipo:'ingreso',caja:'nemesis',categoria:catsFor('ingreso','nemesis').find(c=>/arriendo/i.test(c))||'',persona:'Compartido',descripcion:'Arriendo',monto:Math.min(A.porCobrar||A.mto,A.mto)})})">Registrar pago de arriendo</button></div></div>`}
-  // servicios reembolsables
-  const SL=nemAct().filter(m=>m.tipo==='gasto'&&m.tercero===INQ).sort((a,b)=>b.fecha.localeCompare(a.fecha)).slice(0,4);
-  h+=`<div class="card"><h2>💡 Servicios que devuelve el inquilino</h2>
-    ${SV>0?`<div class="alert">El inquilino les debe <b>${money(SV)}</b> de servicios.</div>`:`<div class="alert good">Servicios al día ✓</div>`}
-    ${SL.map(m=>`<div class="row sp small" style="margin-top:4px"><span>${esc(m.descripcion||m.categoria)} · ${fmtD(parse(m.fecha))}</span><span class="muted">${money(m.monto)}</span></div>`).join('')}
-    <div class="btns"><button class="btn" onclick="openForm(null,${js({tipo:'gasto',caja:'nemesis',categoria:catsFor('gasto','nemesis').find(esServ)||'',tercero:INQ,persona:'Compartido',_inqSet:true})})">🧾 Pagamos un servicio</button>
-    <button class="btn pri" onclick="openForm(null,${js({tipo:'ingreso',caja:'nemesis',categoria:REEMB,tercero:INQ,persona:'Compartido',descripcion:'Reembolso servicios'})})" ${SV>0?'':'disabled'}>💵 Nos devolvió</button></div></div>`;
+  // inquilinos
+  const QA=INQS();
+  h+=`<div class="card"><h2>👥 Inquilinos <span class="small muted">${money(A.mto)}/mes</span></h2>${QA.map((q,i)=>q.activo===false?'':inqCard(q,i)).join('')||'<div class="small muted">Agrega a cada inquilino con su arriendo, día de pago, fecha del contrato y cómo maneja los servicios.</div>'}
+    <div class="btns"><button class="btn" onclick="editInq(null)">+ Agregar inquilino</button></div>
+    ${QA.some(q=>q.activo===false)?`<div class="small muted" style="margin-top:8px">Anteriores: ${QA.map((q,i)=>q.activo===false?`<a href="#" onclick="editInq(${i});return false">${esc(q.nombre)}</a>`:'').filter(Boolean).join(' · ')}</div>`:''}</div>`;
+  const huer=nemAct().filter(m=>m.tercero===INQ);
+  if(huer.length)h+=`<div class="alert">Hay ${huer.length} movimientos de servicios sin inquilino asignado. Tócalos en la lista y elige el inquilino.</div>`;
   // préstamos
   h+=`<div class="card"><h2>🤝 Préstamos con plata de la casa</h2>${P.list.length?P.list.map(([p,v])=>`<div class="fx"><div class="mid" style="flex:1"><div><b>${esc(p)}</b></div>
     <div class="small ${v>0?'warn':'ing'}">${v>0?'Debe '+money(v):'A favor '+money(-v)}</div></div>
@@ -670,13 +734,11 @@ function vAjustes(){
   <div class="card"><h2>🏘️ Casa en arriendo</h2>
   <label class="chk" style="margin-top:0"><input type="checkbox" id="nAct" ${NEM()?'checked':''}> Llevar la caja de la casa en arriendo</label>
   <div class="grid2"><div><label>Nombre</label><input id="nNom" value="${esc(config.nemesis?.nombre||'')}" placeholder="Casa Némesis"></div>
-  <div><label>Arriendo mensual</label><input id="nArr" inputmode="numeric" value="${+config.nemesis?.arriendo?fmtN.format(config.nemesis.arriendo):''}" oninput="fmtInput(this)"></div>
-  <div><label>Día de cobro</label><input id="nDia" type="number" min="1" max="31" value="${config.nemesis?.dia||5}"></div>
-  <div><label>Cobrar desde (mes)</label><input id="nIni" type="month" value="${esc(config.nemesis?.inicio||iso(today()).slice(0,7))}"></div>
   <div><label>Plata en caja hoy</label><input id="nSal" inputmode="numeric" value="${+config.nemesis?.saldoInicial?fmtN.format(config.nemesis.saldoInicial):''}" oninput="fmtInput(this)"></div>
-  <div><label>Arriendo atrasado anterior</label><input id="nPor" inputmode="numeric" value="${+config.nemesis?.porCobrarInicial?fmtN.format(config.nemesis.porCobrarInicial):''}" oninput="fmtInput(this)"></div></div>
+  ${[new Date().getFullYear(),new Date().getFullYear()+1].map(y=>`<div><label>IPC ${y-1} (aumentos de ${y}) %</label><input class="nIpc" data-y="${y}" inputmode="decimal" value="${(config.nemesis?.ipc||{})[y]!==undefined?String(config.nemesis.ipc[y]).replace('.',','):''}" placeholder="${y===2026?'5,10':'Lo publica el DANE en enero'}"></div>`).join('')}</div>
+  <div class="small muted" style="margin-top:6px">Los inquilinos (arriendo, día de pago, contrato y servicios) se manejan en la pestaña 🏘️.</div>
   <label>Categorías de gastos de la casa (una por línea)</label><textarea id="nCat" rows="5">${esc((config.nemesis?.categoriasGasto||DEFAULT_CONFIG.nemesis.categoriasGasto).join('\n'))}</textarea>
-  <div class="small muted" style="margin-top:6px">"Plata en caja hoy": cuánto dinero de la casa tienen guardado ahora. "Arriendo atrasado": lo que les debían antes del mes de inicio.</div></div>
+  <div class="small muted" style="margin-top:6px">"Plata en caja hoy": cuánto dinero de la casa tienen guardado ahora.</div></div>
 
   <div class="card"><h2>🏷️ Categorías</h2><label>Gastos (una por línea)</label><textarea id="aCatG" rows="8">${esc(config.categoriasGasto.join('\n'))}</textarea>
   <label>Ingresos (una por línea)</label><textarea id="aCatI" rows="3">${esc(config.categoriasIngreso.join('\n'))}</textarea>
@@ -689,7 +751,7 @@ function vAjustes(){
   <div class="btns"><button class="btn" onclick="document.getElementById('imp').click()">Restaurar copia</button></div>
   <div class="btns"><button class="btn del" onclick="borrarTodo()">🗑️ Borrar todos los movimientos</button></div>
   <input type="file" id="imp" accept=".json" style="display:none" onchange="importJSON(this.files[0])">
-  <div class="small muted" style="margin-top:8px">Versión 1.4 · Los datos se guardan en este celular y en su Google Sheet.</div></div>`;
+  <div class="small muted" style="margin-top:8px">Versión 1.5 · Los datos se guardan en este celular y en su Google Sheet.</div></div>`;
 }
 const tcRow=t=>`<div class="erow tc rrow" data-old="${esc(t.nombre||'')}" style="display:block"><div class="g" style="grid-template-columns:1fr 36px"><input placeholder="Nombre de la tarjeta" value="${esc(t.nombre||'')}" data-k="nombre"><button class="x" onclick="this.closest('.erow').remove()" aria-label="Quitar tarjeta">✕</button></div>
   <div class="g" style="grid-template-columns:1.3fr .8fr .8fr 1.3fr;margin-top:6px"><select data-k="titular" aria-label="Titular">${config.personas.map(p=>`<option ${t.titular===p?'selected':''}>${esc(p)}</option>`).join('')}</select>
@@ -717,8 +779,8 @@ function saveCfg(){
     return{...prev,nombre:o.nombre,titular:o.titular,corte:+o.corte||0,pago:+o.pago||0,meta:num(o.meta)}}).filter(t=>t.nombre);
   config.fondos=[...document.querySelectorAll('.erow.f')].map(r=>{const o={};r.querySelectorAll('[data-k]').forEach(i=>o[i.dataset.k]=i.value.trim());
     return{nombre:o.nombre,meta:num(o.meta),fecha:o.fecha||'',caja:o.caja==='nemesis'?'nemesis':'hogar'}}).filter(f=>f.nombre);
-  config.nemesis={...(config.nemesis||DEFAULT_CONFIG.nemesis),activo:$('#nAct').checked,nombre:$('#nNom').value.trim()||'Casa en arriendo',arriendo:num($('#nArr').value),
-    dia:Math.min(31,Math.max(1,+$('#nDia').value||5)),inicio:$('#nIni').value||iso(today()).slice(0,7),saldoInicial:num($('#nSal').value),porCobrarInicial:num($('#nPor').value),
+  config.nemesis={...(config.nemesis||DEFAULT_CONFIG.nemesis),activo:$('#nAct').checked,nombre:$('#nNom').value.trim()||'Casa en arriendo',saldoInicial:num($('#nSal').value),
+    ipc:Object.assign({},config.nemesis?.ipc||{},...[...document.querySelectorAll('.nIpc')].map(x=>{const v=parseFloat(x.value.replace(',','.'));return isNaN(v)?{}:{[x.dataset.y]:v}})),
     categoriasGasto:lines($('#nCat').value)};
   config.recurrentes=[...document.querySelectorAll('.rrow')].map(el=>{const r={...(config.recurrentes||[]).find(x=>x.id===el.dataset.id)};
     el.querySelectorAll('[data-k]').forEach(i=>r[i.dataset.k]=i.dataset.k==='monto'?num(i.value):i.dataset.k==='dia'?Math.min(31,Math.max(1,+i.value||1)):i.value.trim());return r}).filter(r=>r.id&&r.nombre);
@@ -742,14 +804,23 @@ function openForm(id,preset){
 }
 function collect(){const g=s=>{const e=$(s);return e?e.value:undefined};
   fm.monto=num(g('#fMonto'));fm.fecha=g('#fFecha')||fm.fecha;fm.descripcion=(g('#fDesc')||'').trim();
-  if($('#fCat'))fm.categoria=g('#fCat');if($('#fMed'))fm.medio=g('#fMed');if($('#fCuo'))fm.cuotas=Math.max(1,+g('#fCuo')||1);if($('#fFon'))fm.fondo=g('#fFon');if($('#fRep'))fm._rep=$('#fRep').checked;if($('#fTer'))fm.tercero=g('#fTer').trim();if($('#fInq'))fm.tercero=$('#fInq').checked?INQ:''}
+  if($('#fCat'))fm.categoria=g('#fCat');if($('#fMed'))fm.medio=g('#fMed');if($('#fCuo'))fm.cuotas=Math.max(1,+g('#fCuo')||1);if($('#fFon'))fm.fondo=g('#fFon');if($('#fRep'))fm._rep=$('#fRep').checked;if($('#fTer'))fm.tercero=g('#fTer').trim();if($('#fInqSel'))fm.tercero=g('#fInqSel')}
 function setF(k,v){collect();fm[k]=v;
-  if(k==='categoria'&&fm.caja==='nemesis'&&fm.tipo==='gasto'&&esServ(v)&&fmNew&&!fm._inqSet){fm.tercero=INQ;fm._inqSet=true}
+
   if(k==='tipo'){if(v==='pago_tc'&&!esTarjeta(fm.medio))fm.medio=config.tarjetas[0]?.nombre||'';
     if((v==='ahorro'||v==='retiro')&&!fm.fondo)fm.fondo=fondosFor(fm.caja||'hogar')[0]?.nombre||'';
     const cats=catsFor(v,fm.caja);if(!cats.includes(fm.categoria))fm.categoria=''}
   if(k==='caja'){if(!catsFor(fm.tipo,v).includes(fm.categoria))fm.categoria='';const F=fondosFor(v||'hogar');if(!F.some(f=>f.nombre===fm.fondo))fm.fondo=F[0]?.nombre||''}
   drawForm()}
+function inqSelHTML(t){if(fm.caja!=='nemesis'||!INQS().length)return'';
+  const arr=t==='ingreso'&&esArr(fm.categoria),reemb=t==='ingreso'&&fm.categoria===REEMB,serv=t==='gasto'&&esServ(fm.categoria);if(!arr&&!reemb&&!serv)return'';
+  const L=INQS().filter(q=>q.activo!==false||q.nombre===fm.tercero).filter(q=>!(serv||reemb)||(q.servicios||'reembolsa')==='reembolsa'||q.nombre===fm.tercero);
+  const lbl=arr?'¿Qué inquilino pagó?':reemb?'¿Quién devolvió los servicios?':'¿De qué inquilino es este servicio?';
+  const S=fm.tercero&&(reemb||serv)?servPorCobrar(fm.tercero):null;
+  return`<label>${lbl}</label><select id="fInqSel" onchange="setF('tercero',this.value)">${serv?`<option value="">Ninguno: lo asume la casa</option>`:`<option value="">— Elegir —</option>`}
+  ${L.map(q=>`<option ${fm.tercero===q.nombre?'selected':''} value="${esc(q.nombre)}">${esc(q.nombre)}${q.unidad?' · '+esc(q.unidad):''}</option>`).join('')}${fm.tercero===INQ?`<option selected value="${INQ}">Sin asignar</option>`:''}</select>
+  ${serv&&fm.tercero?'<div class="small muted" style="margin-top:6px">↩️ Queda como cuenta por cobrar a este inquilino.</div>':''}
+  ${S!==null&&S>0?`<div class="small muted" style="margin-top:6px">${esc(fm.tercero)} debe hoy por servicios: <b>${money(S)}</b></div>`:''}`}
 function drawForm(){const t=fm.tipo,isA=t==='ahorro'||t==='retiro',isP=t==='prestamo'||t==='abono';
   const cats=catsFor(t,fm.caja),FF=fondosFor(fm.caja||'hogar');
   const meds=t==='pago_tc'?config.tarjetas.map(x=>x.nombre):medios();
@@ -765,8 +836,7 @@ function drawForm(){const t=fm.tipo,isA=t==='ahorro'||t==='retiro',isP=t==='pres
   ${t==='gasto'||t==='pago_tc'?`<div class="grid2"><div><label>${t==='pago_tc'?'Tarjeta pagada':'Medio de pago'}</label><select id="fMed" onchange="setF('medio',this.value)">${meds.map(c=>`<option ${fm.medio===c?'selected':''}>${esc(c)}</option>`).join('')}</select></div>
   ${t==='gasto'&&esTarjeta(fm.medio)?`<div><label>Cuotas</label><input id="fCuo" type="number" min="1" max="48" value="${fm.cuotas||1}"></div>`:'<div></div>'}</div>`:''}
   ${t==='pago_tc'?(()=>{const tc=config.tarjetas.find(x=>x.nombre===fm.medio),d=tc?deuda(tc):null;return d!==null?`<div class="small muted" style="margin-top:6px">Deuda actual de esta tarjeta: <b>${money(d)}</b></div>`:''})():''}
-  ${fm.caja==='nemesis'&&t==='gasto'&&esServ(fm.categoria)?`<label class="chk"><input type="checkbox" id="fInq" ${fm.tercero===INQ?'checked':''}> ↩️ El inquilino nos devuelve este pago</label>`:''}
-  ${fm.caja==='nemesis'&&t==='ingreso'&&fm.categoria===REEMB?`<div class="small muted" style="margin-top:6px">El inquilino debe hoy por servicios: <b>${money(servPorCobrar())}</b></div>`:''}
+  ${inqSelHTML(t)}
   <label>Fecha</label><input id="fFecha" type="date" value="${fm.fecha}">
   <label>Descripción (opcional)</label><input id="fDesc" value="${esc(fm.descripcion)}" placeholder="Ej: Mercado Ara, recibo de luz…">
   ${fmNew&&!fm.rec&&t!=='pago_tc'&&t!=='retiro'&&!isP?`<label class="chk"><input type="checkbox" id="fRep" ${fm._rep?'checked':''}> 🔁 Es fijo: recordármelo cada mes el día ${parse(fm.fecha).getDate()}</label>`:''}
@@ -781,9 +851,9 @@ function saveMov(){collect();const m=fm;
   if((m.tipo==='ahorro'||m.tipo==='retiro')&&!m.fondo)return toast('Crea un fondo en Ajustes');
   if(m.tipo==='pago_tc'&&!m.medio)return toast('Agrega tus tarjetas en Ajustes');
   if((m.tipo==='prestamo'||m.tipo==='abono')&&!m.tercero)return toast('Escribe el nombre de la persona');
-  if(m.tipo!=='prestamo'&&m.tipo!=='abono'&&!(m.caja==='nemesis'&&m.tipo==='gasto'&&m.tercero===INQ&&esServ(m.categoria)))m.tercero='';
-  if(m.caja==='nemesis'&&m.tipo==='ingreso'&&m.categoria===REEMB)m.tercero=INQ;
-  delete m._inqSet;
+  const keepT=m.tipo==='prestamo'||m.tipo==='abono'||(m.caja==='nemesis'&&((m.tipo==='gasto'&&esServ(m.categoria))||(m.tipo==='ingreso'&&(esArr(m.categoria)||m.categoria===REEMB))));
+  if(!keepT)m.tercero='';
+  if(m.caja==='nemesis'&&INQA().length&&m.tipo==='ingreso'&&(esArr(m.categoria)||m.categoria===REEMB)&&!m.tercero)return toast('Elige el inquilino');
   if(m.tipo==='pago_tc')m.caja='';
   if(m.tipo!=='gasto'||!esTarjeta(m.medio))m.cuotas=1;
   if(['ingreso','ahorro','retiro','prestamo','abono'].includes(m.tipo))m.medio='';

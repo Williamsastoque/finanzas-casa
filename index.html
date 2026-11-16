@@ -457,9 +457,12 @@ function listByDay(list){
 function barRow(label,val,max,color,extra=''){const p=max>0?Math.min(100,val/max*100):0;
   return`<div class="brow"><div class="l"><span>${label}</span><span>${extra||money(val)}</span></div><div class="bar"><i style="width:${p}%;background:${color}"></i></div></div>`}
 
+function srvBanner(){return local.serverViejo?`<div class="alert bad">⚠️ <b>El servidor de Google Sheets está desactualizado.</b> Los datos de la casa (inquilinos, préstamos, efectivo/cuenta) no le llegan completos al otro celular. Actualiza el código de Apps Script y publica una <b>Nueva versión</b>. Cuando lo hagas, la app reenvía todo sola.</div>`:''}
+function reenviarTodo(){if(!confirm('¿Reenviar todos los movimientos de este celular a la Google Sheet? Úsalo si el otro celular no ve la misma información.'))return;
+  for(const m of movs)if(!pending.includes(m.id))pending.push(m.id);configDirty=true;config.updatedAt=Date.now();persist();sync(true)}
 function vInicio(){
   const c=cycleAt(cycleOff),L=inCycle(c),t=totals(L);
-  let h=(cycleOff===0?quickCard():'')+cycleBar();
+  let h=srvBanner()+(cycleOff===0?quickCard():'')+cycleBar();
   h+=`<div class="card"><div class="muted small">Disponible del ciclo (ingresos − gastos − ahorro)</div>
   <div class="big ${t.disp<0?'gas':''}">${money(t.disp)}</div>
   <div class="grid3" style="margin-top:10px"><div class="stat"><span class="small muted">Ingresos</span><b class="ing">${money(t.ing)}</b></div>
@@ -803,7 +806,7 @@ function vNemesis(){
   if(!NEM())return`<div class="card empty">🏘️ Activa el manejo de la casa en arriendo en <b>Ajustes → Casa en arriendo</b>.<br><br><button class="btn pri" onclick="go('ajustes')">Ir a Ajustes</button></div>`;
   const N=config.nemesis,A=arrStatus(),C=nemCajas(),P=prestSaldos('nemesis'),F=fondosFor('nemesis'),ahorrado=F.reduce((a,f)=>a+fondoSaldo(f.nombre),0),SV=servPorCobrar();
   if(!['general','inquilinos','movs'].includes(nemSec))nemSec='general';
-  let h=`<div class="chips" style="margin-bottom:12px">${[['general','🏠 Casa general'],['inquilinos','👥 Inquilinos'],['movs','📋 Movimientos']].map(([k,l])=>`<button class="${nemSec===k?'on':''}" onclick="nemSec='${k}';render()">${l}</button>`).join('')}</div>`;
+  let h=srvBanner()+`<div class="chips" style="margin-bottom:12px">${[['general','🏠 Casa general'],['inquilinos','👥 Inquilinos'],['movs','📋 Movimientos']].map(([k,l])=>`<button class="${nemSec===k?'on':''}" onclick="nemSec='${k}';render()">${l}</button>`).join('')}</div>`;
   if(nemSec==='general'){
     h+=`<div class="card"><div class="muted small">Plata de ${esc(NN())}</div><div class="big ${C.total<0?'gas':''}">${money(C.total)}</div>
     <div class="grid2" style="margin-top:10px"><div class="stat"><span class="small muted">💵 Efectivo</span><b class="${C.efectivo<0?'gas':''}">${money(C.efectivo)}</b></div>
@@ -910,9 +913,10 @@ function vAjustes(){
   <div class="card"><h2>💾 Datos</h2><div class="btns" style="flex-wrap:wrap">
   <button class="btn" onclick="exportCSV()">Exportar todo (CSV)</button><button class="btn" onclick="exportJSON()">Copia de seguridad</button></div>
   <div class="btns"><button class="btn" onclick="document.getElementById('imp').click()">Restaurar copia</button></div>
+  <div class="btns"><button class="btn" onclick="reenviarTodo()">🔁 Reenviar todo a la Google Sheet</button></div>
   <div class="btns"><button class="btn del" onclick="borrarTodo()">🗑️ Borrar todos los movimientos</button></div>
   <input type="file" id="imp" accept=".json" style="display:none" onchange="importJSON(this.files[0])">
-  <div class="small muted" style="margin-top:8px">Versión 1.8 · Los datos se guardan en este celular y en su Google Sheet.</div></div>`;
+  <div class="small muted" style="margin-top:8px">Versión 1.9 · Los datos se guardan en este celular y en su Google Sheet.</div></div>`;
 }
 const tcRow=t=>`<div class="erow tc rrow" data-old="${esc(t.nombre||'')}" style="display:block"><div class="g" style="grid-template-columns:1fr 36px"><input placeholder="Nombre de la tarjeta" value="${esc(t.nombre||'')}" data-k="nombre"><button class="x" onclick="this.closest('.erow').remove()" aria-label="Quitar tarjeta">✕</button></div>
   <div class="g" style="grid-template-columns:1.3fr .8fr .8fr 1.3fr;margin-top:6px"><select data-k="titular" aria-label="Titular">${config.personas.map(p=>`<option ${t.titular===p?'selected':''}>${esc(p)}</option>`).join('')}</select>
@@ -1063,6 +1067,9 @@ async function sync(manual){
     if(sentCfg!==null&&config.updatedAt===sentCfg)configDirty=false;
     const map=new Map(movs.map(m=>[m.id,m]));
     local.srv=+j.v||1;
+    const srvNuevo=!(j.items||[]).length||('caja' in j.items[0]);
+    if(!srvNuevo)local.serverViejo=true;
+    else if(local.serverViejo){local.serverViejo=false;for(const m of movs)if((m.caja||m.tercero)&&!pending.includes(m.id))pending.push(m.id);setTimeout(()=>{toast('Servidor actualizado: reenviando los datos de la casa…');scheduleSync()},500)}
     for(const s0 of j.items||[]){const s=norm(s0),l=map.get(s.id);if(l)for(const k of['caja','tercero'])if(!(k in s0))s[k]=l[k]||'';if(!l||(!pending.includes(s.id)&&s.actualizado>=(+l.actualizado||0)))map.set(s.id,s)}
     movs=[...map.values()];
     if(j.config&&(!local.lastSync||((+j.config.updatedAt||0)>(+config.updatedAt||0)&&!configDirty))){
